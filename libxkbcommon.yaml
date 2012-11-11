@@ -1,0 +1,30 @@
+Name: libxkbcommon
+Summary: Xorg X11 common xkb library
+Description: xkb Libraries file. 
+Version: 0.2.0
+Release: 1
+Group: System/Libraries
+License: MIT
+URL: http://www.x.org/
+Sources:
+    - libxkbcommon-%{version}.tar.bz2
+PkgConfigBR:
+    - xproto
+    - xorg-macros
+    - kbproto >= 1.0.4
+    - x11
+PkgBR:
+    - byacc
+    - libtool
+    - flex
+    - bison
+Configure: reconfigure
+ConfigOptions:
+    - --with-xkb-config-root=/usr/share/X11/xkb
+PreRequires:
+    - xorg-x11-filesystem
+SubPackages:
+    - Name: devel
+      Summary: Xorg X11 common xkb libray
+      Description: xkb Development Libraries file. 
+      Group: Development/Libraries
