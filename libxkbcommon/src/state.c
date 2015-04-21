@@ -61,6 +61,7 @@
 
 #include "keymap.h"
 #include "keysym.h"
+#include "utf8.h"
 
 struct xkb_filter {
     union xkb_action action;
@@ -108,7 +109,7 @@ struct xkb_state {
      * < Left Shift down, Right Shift down, Left Shift Up >
      * the modifier should still be set. This keeps the count.
      */
-    int16_t mod_key_count[sizeof(xkb_mod_mask_t) * 8];
+    int16_t mod_key_count[XKB_MAX_MODS];
 
     int refcnt;
     darray(struct xkb_filter) filters;
@@ -121,15 +122,14 @@ get_entry_for_key_state(struct xkb_state *state, const struct xkb_key *key,
 {
     const struct xkb_key_type *type = key->groups[group].type;
     xkb_mod_mask_t active_mods = state->components.mods & type->mods.mask;
-    unsigned int i;
 
-    for (i = 0; i < type->num_entries; i++) {
+    for (unsigned i = 0; i < type->num_entries; i++) {
         /*
          * If the virtual modifiers are not bound to anything, we're
          * supposed to skip the entry (xserver does this with cached
          * entry->active field).
          */
-        if (!type->entries[i].mods.mask)
+        if (type->entries[i].mods.mods != 0 && type->entries[i].mods.mask == 0)
             continue;
 
         if (type->entries[i].mods.mask == active_mods)
@@ -162,7 +162,7 @@ xkb_state_key_get_level(struct xkb_state *state, xkb_keycode_t kc,
 }
 
 xkb_layout_index_t
-wrap_group_into_range(int32_t group,
+XkbWrapGroupIntoRange(int32_t group,
                       xkb_layout_index_t num_groups,
                       enum xkb_range_exceed_type out_of_range_group_action,
                       xkb_layout_index_t out_of_range_group_number)
@@ -170,7 +170,7 @@ wrap_group_into_range(int32_t group,
     if (num_groups == 0)
         return XKB_LAYOUT_INVALID;
 
-    if (group < num_groups)
+    if (group >= 0 && (xkb_layout_index_t) group < num_groups)
         return group;
 
     switch (out_of_range_group_action) {
@@ -210,7 +210,7 @@ xkb_state_key_get_layout(struct xkb_state *state, xkb_keycode_t kc)
     if (!key)
         return XKB_LAYOUT_INVALID;
 
-    return wrap_group_into_range(state->components.group, key->num_groups,
+    return XkbWrapGroupIntoRange(state->components.group, key->num_groups,
                                  key->out_of_range_group_action,
                                  key->out_of_range_group_number);
 }
@@ -619,34 +619,46 @@ xkb_state_led_update_all(struct xkb_state *state)
 
     state->components.leds = 0;
 
-    darray_enumerate(idx, led, state->keymap->leds) {
+    xkb_leds_enumerate(idx, led, state->keymap) {
         xkb_mod_mask_t mod_mask = 0;
         xkb_layout_mask_t group_mask = 0;
 
-        if (led->which_mods & XKB_STATE_MODS_EFFECTIVE)
-            mod_mask |= state->components.mods;
-        if (led->which_mods & XKB_STATE_MODS_DEPRESSED)
-            mod_mask |= state->components.base_mods;
-        if (led->which_mods & XKB_STATE_MODS_LATCHED)
-            mod_mask |= state->components.latched_mods;
-        if (led->which_mods & XKB_STATE_MODS_LOCKED)
-            mod_mask |= state->components.locked_mods;
-        if (led->mods.mask & mod_mask)
-            state->components.leds |= (1 << idx);
+        if (led->which_mods != 0 && led->mods.mask != 0) {
+            if (led->which_mods & XKB_STATE_MODS_EFFECTIVE)
+                mod_mask |= state->components.mods;
+            if (led->which_mods & XKB_STATE_MODS_DEPRESSED)
+                mod_mask |= state->components.base_mods;
+            if (led->which_mods & XKB_STATE_MODS_LATCHED)
+                mod_mask |= state->components.latched_mods;
+            if (led->which_mods & XKB_STATE_MODS_LOCKED)
+                mod_mask |= state->components.locked_mods;
 
-        if (led->which_groups & XKB_STATE_LAYOUT_EFFECTIVE)
-            group_mask |= (1 << state->components.group);
-        if (led->which_groups & XKB_STATE_LAYOUT_DEPRESSED)
-            group_mask |= (1 << state->components.base_group);
-        if (led->which_groups & XKB_STATE_LAYOUT_LATCHED)
-            group_mask |= (1 << state->components.latched_group);
-        if (led->which_groups & XKB_STATE_LAYOUT_LOCKED)
-            group_mask |= (1 << state->components.locked_group);
-        if (led->groups & group_mask)
-            state->components.leds |= (1 << idx);
+            if (led->mods.mask & mod_mask) {
+                state->components.leds |= (1u << idx);
+                continue;
+            }
+        }
 
-        if (led->ctrls & state->keymap->enabled_ctrls)
-            state->components.leds |= (1 << idx);
+        if (led->which_groups != 0 && led->groups != 0) {
+            if (led->which_groups & XKB_STATE_LAYOUT_EFFECTIVE)
+                group_mask |= (1u << state->components.group);
+            if (led->which_groups & XKB_STATE_LAYOUT_DEPRESSED)
+                group_mask |= (1u << state->components.base_group);
+            if (led->which_groups & XKB_STATE_LAYOUT_LATCHED)
+                group_mask |= (1u << state->components.latched_group);
+            if (led->which_groups & XKB_STATE_LAYOUT_LOCKED)
+                group_mask |= (1u << state->components.locked_group);
+
+            if (led->groups & group_mask) {
+                state->components.leds |= (1u << idx);
+                continue;
+            }
+        }
+
+        if (led->ctrls & state->keymap->enabled_ctrls) {
+            state->components.leds |= (1u << idx);
+            continue;
+        }
     }
 }
 
@@ -657,23 +669,27 @@ xkb_state_led_update_all(struct xkb_state *state)
 static void
 xkb_state_update_derived(struct xkb_state *state)
 {
+    xkb_layout_index_t wrapped;
+
     state->components.mods = (state->components.base_mods |
                               state->components.latched_mods |
                               state->components.locked_mods);
 
     /* TODO: Use groups_wrap control instead of always RANGE_WRAP. */
 
+    wrapped = XkbWrapGroupIntoRange(state->components.locked_group,
+                                    state->keymap->num_groups,
+                                    RANGE_WRAP, 0);
     state->components.locked_group =
-        wrap_group_into_range(state->components.locked_group,
-                              state->keymap->num_groups,
-                              RANGE_WRAP, 0);
+        (wrapped == XKB_LAYOUT_INVALID ? 0 : wrapped);
 
+    wrapped = XkbWrapGroupIntoRange(state->components.base_group +
+                                    state->components.latched_group +
+                                    state->components.locked_group,
+                                    state->keymap->num_groups,
+                                    RANGE_WRAP, 0);
     state->components.group =
-        wrap_group_into_range(state->components.base_group +
-                              state->components.latched_group +
-                              state->components.locked_group,
-                              state->keymap->num_groups,
-                              RANGE_WRAP, 0);
+        (wrapped == XKB_LAYOUT_INVALID ? 0 : wrapped);
 
     xkb_state_led_update_all(state);
 }
@@ -770,25 +786,37 @@ xkb_state_update_mask(struct xkb_state *state,
                       xkb_layout_index_t locked_group)
 {
     struct state_components prev_components;
-    xkb_mod_index_t num_mods;
-    xkb_mod_index_t idx;
+    xkb_mod_mask_t mask;
 
     prev_components = state->components;
 
-    state->components.base_mods = 0;
-    state->components.latched_mods = 0;
-    state->components.locked_mods = 0;
-    num_mods = xkb_keymap_num_mods(state->keymap);
+    /* Only include modifiers which exist in the keymap. */
+    mask = (xkb_mod_mask_t) ((1ull << xkb_keymap_num_mods(state->keymap)) - 1u);
 
-    for (idx = 0; idx < num_mods; idx++) {
-        xkb_mod_mask_t mod = (1 << idx);
-        if (base_mods & mod)
-            state->components.base_mods |= mod;
-        if (latched_mods & mod)
-            state->components.latched_mods |= mod;
-        if (locked_mods & mod)
-            state->components.locked_mods |= mod;
-    }
+    state->components.base_mods = base_mods & mask;
+    state->components.latched_mods = latched_mods & mask;
+    state->components.locked_mods = locked_mods & mask;
+
+    /* Make sure the mods are fully resolved - since we get arbitrary
+     * input, they might not be.
+     *
+     * It might seem more reasonable to do this only for components.mods
+     * in xkb_state_update_derived(), rather than for each component
+     * seperately.  That would allow to distinguish between "really"
+     * depressed mods (would be in MODS_DEPRESSED) and indirectly
+     * depressed to to a mapping (would only be in MODS_EFFECTIVE).
+     * However, the traditional behavior of xkb_state_update_key() is that
+     * if a vmod is depressed, its mappings are depressed with it; so we're
+     * expected to do the same here.  Also, LEDs (usually) look if a real
+     * mod is locked, not just effective; otherwise it won't be lit.
+     *
+     * We OR here because mod_mask_get_effective() drops vmods. */
+    state->components.base_mods |=
+        mod_mask_get_effective(state->keymap, state->components.base_mods);
+    state->components.latched_mods |=
+        mod_mask_get_effective(state->keymap, state->components.latched_mods);
+    state->components.locked_mods |=
+        mod_mask_get_effective(state->keymap, state->components.locked_mods);
 
     state->components.base_group = base_group;
     state->components.latched_group = latched_group;
@@ -826,6 +854,53 @@ err:
     return 0;
 }
 
+/*
+ * http://www.x.org/releases/current/doc/kbproto/xkbproto.html#Interpreting_the_Lock_Modifier
+ */
+static bool
+should_do_caps_transformation(struct xkb_state *state, xkb_keycode_t kc)
+{
+    xkb_mod_index_t caps =
+        xkb_keymap_mod_get_index(state->keymap, XKB_MOD_NAME_CAPS);
+
+    return
+        xkb_state_mod_index_is_active(state, caps, XKB_STATE_MODS_EFFECTIVE) > 0 &&
+        xkb_state_mod_index_is_consumed(state, kc, caps) == 0;
+}
+
+/*
+ * http://www.x.org/releases/current/doc/kbproto/xkbproto.html#Interpreting_the_Control_Modifier
+ */
+static bool
+should_do_ctrl_transformation(struct xkb_state *state, xkb_keycode_t kc)
+{
+    xkb_mod_index_t ctrl =
+        xkb_keymap_mod_get_index(state->keymap, XKB_MOD_NAME_CTRL);
+
+    return
+        xkb_state_mod_index_is_active(state, ctrl, XKB_STATE_MODS_EFFECTIVE) > 0 &&
+        xkb_state_mod_index_is_consumed(state, kc, ctrl) == 0;
+}
+
+/* Verbatim from libX11:src/xkb/XKBBind.c */
+static char
+XkbToControl(char ch)
+{
+    char c = ch;
+
+    if ((c >= '@' && c < '\177') || c == ' ')
+        c &= 0x1F;
+    else if (c == '2')
+        c = '\000';
+    else if (c >= '3' && c <= '7')
+        c -= ('3' - '\033');
+    else if (c == '8')
+        c = '\177';
+    else if (c == '/')
+        c = '_' & 0x1F;
+    return c;
+}
+
 /**
  * Provides either exactly one symbol, or XKB_KEY_NoSymbol.
  */
@@ -835,7 +910,6 @@ xkb_state_key_get_one_sym(struct xkb_state *state, xkb_keycode_t kc)
     const xkb_keysym_t *syms;
     xkb_keysym_t sym;
     int num_syms;
-    xkb_mod_index_t caps;
 
     num_syms = xkb_state_key_get_syms(state, kc, &syms);
     if (num_syms != 1)
@@ -843,16 +917,133 @@ xkb_state_key_get_one_sym(struct xkb_state *state, xkb_keycode_t kc)
 
     sym = syms[0];
 
-    /*
-     * Perform capitalization transformation, see:
-     * http://www.x.org/releases/current/doc/kbproto/xkbproto.html#Interpreting_the_Lock_Modifier
-     */
-    caps = xkb_keymap_mod_get_index(state->keymap, XKB_MOD_NAME_CAPS);
-    if (xkb_state_mod_index_is_active(state, caps, XKB_STATE_MODS_EFFECTIVE) > 0 &&
-        xkb_state_mod_index_is_consumed(state, kc, caps) == 0)
+    if (should_do_caps_transformation(state, kc))
         sym = xkb_keysym_to_upper(sym);
 
     return sym;
+}
+
+/*
+ * The caps and ctrl transformations require some special handling,
+ * so we cannot simply use xkb_state_get_one_sym() for them.
+ * In particular, if Control is set, we must try very hard to find
+ * some layout in which the keysym is ASCII and thus can be (maybe)
+ * converted to a control character. libX11 allows to disable this
+ * behavior with the XkbLC_ControlFallback (see XkbSetXlibControls(3)),
+ * but it is enabled by default, yippee.
+ */
+static xkb_keysym_t
+get_one_sym_for_string(struct xkb_state *state, xkb_keycode_t kc)
+{
+    xkb_level_index_t level;
+    xkb_layout_index_t layout, num_layouts;
+    const xkb_keysym_t *syms;
+    int nsyms;
+    xkb_keysym_t sym;
+
+    layout = xkb_state_key_get_layout(state, kc);
+    num_layouts = xkb_keymap_num_layouts_for_key(state->keymap, kc);
+    level = xkb_state_key_get_level(state, kc, layout);
+    if (layout == XKB_LAYOUT_INVALID || num_layouts == 0 ||
+        level == XKB_LEVEL_INVALID)
+        return XKB_KEY_NoSymbol;
+
+    nsyms = xkb_keymap_key_get_syms_by_level(state->keymap, kc,
+                                             layout, level, &syms);
+    if (nsyms != 1)
+        return XKB_KEY_NoSymbol;
+    sym = syms[0];
+
+    if (should_do_ctrl_transformation(state, kc) && sym > 127u) {
+        for (xkb_layout_index_t i = 0; i < num_layouts; i++) {
+            level = xkb_state_key_get_level(state, kc, i);
+            if (level == XKB_LEVEL_INVALID)
+                continue;
+
+            nsyms = xkb_keymap_key_get_syms_by_level(state->keymap, kc,
+                                                     i, level, &syms);
+            if (nsyms == 1 && syms[0] <= 127u) {
+                sym = syms[0];
+                break;
+            }
+        }
+    }
+
+    if (should_do_caps_transformation(state, kc)) {
+        sym = xkb_keysym_to_upper(sym);
+    }
+
+    return sym;
+}
+
+XKB_EXPORT int
+xkb_state_key_get_utf8(struct xkb_state *state, xkb_keycode_t kc,
+                       char *buffer, size_t size)
+{
+    xkb_keysym_t sym;
+    const xkb_keysym_t *syms;
+    int nsyms;
+    int offset;
+    char tmp[7];
+
+    sym = get_one_sym_for_string(state, kc);
+    if (sym != XKB_KEY_NoSymbol) {
+        nsyms = 1; syms = &sym;
+    }
+    else {
+        nsyms = xkb_state_key_get_syms(state, kc, &syms);
+    }
+
+    /* Make sure not to truncate in the middle of a UTF-8 sequence. */
+    offset = 0;
+    for (int i = 0; i < nsyms; i++) {
+        int ret = xkb_keysym_to_utf8(syms[i], tmp, sizeof(tmp));
+        if (ret <= 0)
+            goto err_bad;
+
+        ret--;
+        if ((size_t) (offset + ret) <= size)
+            memcpy(buffer + offset, tmp, ret);
+        offset += ret;
+    }
+
+    if ((size_t) offset >= size)
+        goto err_trunc;
+    buffer[offset] = '\0';
+
+    if (!is_valid_utf8(buffer, offset))
+        goto err_bad;
+
+    if (offset == 1 && (unsigned int) buffer[0] <= 127u &&
+        should_do_ctrl_transformation(state, kc))
+        buffer[0] = XkbToControl(buffer[0]);
+
+    return offset;
+
+err_trunc:
+    if (size > 0)
+        buffer[size - 1] = '\0';
+    return offset;
+
+err_bad:
+    if (size > 0)
+        buffer[0] = '\0';
+    return 0;
+}
+
+XKB_EXPORT uint32_t
+xkb_state_key_get_utf32(struct xkb_state *state, xkb_keycode_t kc)
+{
+    xkb_keysym_t sym;
+    uint32_t cp;
+
+    sym = get_one_sym_for_string(state, kc);
+    cp = xkb_keysym_to_utf32(sym);
+
+    if (cp <= 127u && should_do_ctrl_transformation(state, kc))
+        cp = (uint32_t) XkbToControl((char) cp);
+
+    return cp;
 }
 
 /**
@@ -902,6 +1093,28 @@ xkb_state_serialize_layout(struct xkb_state *state,
 }
 
 /**
+ * Gets a modifier mask and returns the resolved effective mask; this
+ * is needed because some modifiers can also map to other modifiers, e.g.
+ * the "NumLock" modifier usually also sets the "Mod2" modifier.
+ */
+xkb_mod_mask_t
+mod_mask_get_effective(struct xkb_keymap *keymap, xkb_mod_mask_t mods)
+{
+    const struct xkb_mod *mod;
+    xkb_mod_index_t i;
+    xkb_mod_mask_t mask;
+
+    /* The effective mask is only real mods for now. */
+    mask = mods & MOD_REAL_MASK_ALL;
+
+    xkb_mods_enumerate(i, mod, &keymap->mods)
+        if (mods & (1u << i))
+            mask |= mod->mapping;
+
+    return mask;
+}
+
+/**
  * Returns 1 if the given modifier is active with the specified type(s), 0 if
  * not, or -1 if the modifier is invalid.
  */
@@ -913,7 +1126,7 @@ xkb_state_mod_index_is_active(struct xkb_state *state,
     if (idx >= xkb_keymap_num_mods(state->keymap))
         return -1;
 
-    return !!(xkb_state_serialize_mods(state, type) & (1 << idx));
+    return !!(xkb_state_serialize_mods(state, type) & (1u << idx));
 }
 
 /**
@@ -964,7 +1177,7 @@ xkb_state_mod_indices_are_active(struct xkb_state *state,
             ret = -1;
             break;
         }
-        wanted |= (1 << idx);
+        wanted |= (1u << idx);
     }
     va_end(ap);
 
@@ -1002,13 +1215,12 @@ xkb_state_mod_names_are_active(struct xkb_state *state,
 {
     va_list ap;
     xkb_mod_index_t idx = 0;
-    const char *str;
     xkb_mod_mask_t wanted = 0;
     int ret = 0;
 
     va_start(ap, match);
     while (1) {
-        str = va_arg(ap, const char *);
+        const char *str = va_arg(ap, const char *);
         if (str == NULL)
             break;
         idx = xkb_keymap_mod_get_index(state->keymap, str);
@@ -1016,7 +1228,7 @@ xkb_state_mod_names_are_active(struct xkb_state *state,
             ret = -1;
             break;
         }
-        wanted |= (1 << idx);
+        wanted |= (1u << idx);
     }
     va_end(ap);
 
@@ -1043,11 +1255,11 @@ xkb_state_layout_index_is_active(struct xkb_state *state,
     if (type & XKB_STATE_LAYOUT_EFFECTIVE)
         ret |= (state->components.group == idx);
     if (type & XKB_STATE_LAYOUT_DEPRESSED)
-        ret |= (state->components.base_group == idx);
+        ret |= (state->components.base_group == (int32_t) idx);
     if (type & XKB_STATE_LAYOUT_LATCHED)
-        ret |= (state->components.latched_group == idx);
+        ret |= (state->components.latched_group == (int32_t) idx);
     if (type & XKB_STATE_LAYOUT_LOCKED)
-        ret |= (state->components.locked_group == idx);
+        ret |= (state->components.locked_group == (int32_t) idx);
 
     return ret;
 }
@@ -1074,11 +1286,11 @@ xkb_state_layout_name_is_active(struct xkb_state *state, const char *name,
 XKB_EXPORT int
 xkb_state_led_index_is_active(struct xkb_state *state, xkb_led_index_t idx)
 {
-    if (idx >= darray_size(state->keymap->leds) ||
-        darray_item(state->keymap->leds, idx).name == XKB_ATOM_NONE)
+    if (idx >= state->keymap->num_leds ||
+        state->keymap->leds[idx].name == XKB_ATOM_NONE)
         return -1;
 
-    return !!(state->components.leds & (1 << idx));
+    return !!(state->components.leds & (1u << idx));
 }
 
 /**
@@ -1098,18 +1310,24 @@ xkb_state_led_name_is_active(struct xkb_state *state, const char *name)
 static xkb_mod_mask_t
 key_get_consumed(struct xkb_state *state, const struct xkb_key *key)
 {
+    const struct xkb_key_type *type;
     const struct xkb_key_type_entry *entry;
+    xkb_mod_mask_t preserve;
     xkb_layout_index_t group;
 
     group = xkb_state_key_get_layout(state, key->keycode);
     if (group == XKB_LAYOUT_INVALID)
         return 0;
 
-    entry = get_entry_for_key_state(state, key, group);
-    if (!entry)
-        return 0;
+    type = key->groups[group].type;
 
-    return entry->mods.mask & ~entry->preserve.mask;
+    entry = get_entry_for_key_state(state, key, group);
+    if (entry)
+        preserve = entry->preserve.mask;
+    else
+        preserve = 0;
+
+    return type->mods.mask & ~preserve;
 }
 
 /**
@@ -1133,7 +1351,7 @@ xkb_state_mod_index_is_consumed(struct xkb_state *state, xkb_keycode_t kc,
     if (!key || idx >= xkb_keymap_num_mods(state->keymap))
         return -1;
 
-    return !!((1 << idx) & key_get_consumed(state, key));
+    return !!((1u << idx) & key_get_consumed(state, key));
 }
 
 /**
@@ -1154,4 +1372,15 @@ xkb_state_mod_mask_remove_consumed(struct xkb_state *state, xkb_keycode_t kc,
         return 0;
 
     return mask & ~key_get_consumed(state, key);
+}
+
+XKB_EXPORT xkb_mod_mask_t
+xkb_state_key_get_consumed_mods(struct xkb_state *state, xkb_keycode_t kc)
+{
+    const struct xkb_key *key = XkbKey(state->keymap, kc);
+
+    if (!key)
+        return 0;
+
+    return key_get_consumed(state, key);
 }

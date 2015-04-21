@@ -32,15 +32,7 @@
 static void
 ComputeEffectiveMask(struct xkb_keymap *keymap, struct xkb_mods *mods)
 {
-    const struct xkb_mod *mod;
-    xkb_mod_index_t i;
-
-    /* The effective mask is only real mods for now. */
-    mods->mask = mods->mods & MOD_REAL_MASK_ALL;
-
-    darray_enumerate(i, mod, keymap->mods)
-        if (mods->mods & (1 << i))
-            mods->mask |= mod->mapping;
+    mods->mask = mod_mask_get_effective(keymap, mods->mods);
 }
 
 static void
@@ -92,7 +84,7 @@ FindInterpForKey(struct xkb_keymap *keymap, const struct xkb_key *key,
      * sym_interprets array from the most specific to the least specific,
      * such that when we find a match we return immediately.
      */
-    for (int i = 0; i < keymap->num_sym_interprets; i++) {
+    for (unsigned i = 0; i < keymap->num_sym_interprets; i++) {
         const struct xkb_sym_interpret *interp = &keymap->sym_interprets[i];
 
         xkb_mod_mask_t mods;
@@ -115,7 +107,7 @@ FindInterpForKey(struct xkb_keymap *keymap, const struct xkb_key *key,
             found = (!mods || (interp->mods & mods));
             break;
         case MATCH_ANY:
-            found = !!(interp->mods & mods);
+            found = (interp->mods & mods);
             break;
         case MATCH_ALL:
             found = ((interp->mods & mods) == interp->mods);
@@ -144,7 +136,7 @@ ApplyInterpsToKey(struct xkb_keymap *keymap, struct xkb_key *key)
         return true;
 
     for (group = 0; group < key->num_groups; group++) {
-        for (level = 0; level < XkbKeyGroupWidth(key, group); level++) {
+        for (level = 0; level < XkbKeyNumLevels(key, group); level++) {
             const struct xkb_sym_interpret *interp;
 
             interp = FindInterpForKey(keymap, key, group, level);
@@ -158,7 +150,7 @@ ApplyInterpsToKey(struct xkb_keymap *keymap, struct xkb_key *key)
 
             if ((group == 0 && level == 0) || !interp->level_one_only)
                 if (interp->virtual_mod != XKB_MOD_INVALID)
-                    vmodmap |= (1 << interp->virtual_mod);
+                    vmodmap |= (1u << interp->virtual_mod);
 
             if (interp->action.type != ACTION_TYPE_NONE)
                 key->groups[group].levels[level].action = interp->action;
@@ -180,21 +172,21 @@ ApplyInterpsToKey(struct xkb_keymap *keymap, struct xkb_key *key)
 static bool
 UpdateDerivedKeymapFields(struct xkb_keymap *keymap)
 {
+    struct xkb_key *key;
     struct xkb_mod *mod;
     struct xkb_led *led;
     unsigned int i, j;
-    struct xkb_key *key;
 
     /* Find all the interprets for the key and bind them to actions,
      * which will also update the vmodmap. */
-    xkb_foreach_key(key, keymap)
+    xkb_keys_foreach(key, keymap)
         if (!ApplyInterpsToKey(keymap, key))
             return false;
 
     /* Update keymap->mods, the virtual -> real mod mapping. */
-    xkb_foreach_key(key, keymap)
-        darray_enumerate(i, mod, keymap->mods)
-            if (key->vmodmap & (1 << i))
+    xkb_keys_foreach(key, keymap)
+        xkb_mods_enumerate(i, mod, &keymap->mods)
+            if (key->vmodmap & (1u << i))
                 mod->mapping |= key->modmap;
 
     /* Now update the level masks for all the types to reflect the vmods. */
@@ -208,18 +200,18 @@ UpdateDerivedKeymapFields(struct xkb_keymap *keymap)
     }
 
     /* Update action modifiers. */
-    xkb_foreach_key(key, keymap)
+    xkb_keys_foreach(key, keymap)
         for (i = 0; i < key->num_groups; i++)
-            for (j = 0; j < XkbKeyGroupWidth(key, i); j++)
+            for (j = 0; j < XkbKeyNumLevels(key, i); j++)
                 UpdateActionMods(keymap, &key->groups[i].levels[j].action,
                                  key->modmap);
 
     /* Update vmod -> led maps. */
-    darray_foreach(led, keymap->leds)
+    xkb_leds_foreach(led, keymap)
         ComputeEffectiveMask(keymap, &led->mods);
 
     /* Find maximum number of groups out of all keys in the keymap. */
-    xkb_foreach_key(key, keymap)
+    xkb_keys_foreach(key, keymap)
         keymap->num_groups = MAX(keymap->num_groups, key->num_groups);
 
     return true;

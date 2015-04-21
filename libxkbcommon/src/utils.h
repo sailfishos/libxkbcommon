@@ -40,6 +40,10 @@
  */
 #define UNCONSTIFY(const_ptr)  ((void *) (uintptr_t) (const_ptr))
 
+#define STATIC_ASSERT(expr, message) do { \
+    switch (0) { case 0: case (expr): ; } \
+} while (0)
+
 static inline bool
 streq(const char *s1, const char *s2)
 {
@@ -99,7 +103,7 @@ strempty(const char *s)
 static inline void *
 memdup(const void *mem, size_t nmemb, size_t size)
 {
-    void *p = malloc(nmemb * size);
+    void *p = calloc(nmemb, size);
     if (p)
         memcpy(p, mem, nmemb * size);
     return p;
@@ -158,6 +162,22 @@ is_graph(char ch)
     return ch >= '!' && ch <= '~';
 }
 
+/*
+ * Return the bit position of the most significant bit.
+ * Note: this is 1-based! It's more useful this way, and returns 0 when
+ * mask is all 0s.
+ */
+static inline unsigned
+msb_pos(uint32_t mask)
+{
+    unsigned pos = 0;
+    while (mask) {
+        pos++;
+        mask >>= 1u;
+    }
+    return pos;
+}
+
 bool
 map_file(FILE *file, const char **string_out, size_t *size_out);
 
@@ -170,6 +190,25 @@ unmap_file(const char *str, size_t size);
 #define MIN3(a, b, c) MIN(MIN((a), (b)), (c))
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #define MAX3(a, b, c) MAX(MAX((a), (b)), (c))
+
+/* Round up @a so it's divisible by @b. */
+#define ROUNDUP(a, b) (((a) + (b) - 1) / (b) * (b))
+
+#if defined(HAVE_SECURE_GETENV)
+# define secure_getenv secure_getenv
+#elif defined(HAVE___SECURE_GETENV)
+# define secure_getenv __secure_getenv
+#else
+# define secure_getenv getenv
+#endif
+
+#if defined(HAVE___BUILTIN_EXPECT)
+# define likely(x)   __builtin_expect(!!(x), 1)
+# define unlikely(x) __builtin_expect(!!(x), 0)
+#else
+# define likely(x)   (x)
+# define unlikely(x) (x)
+#endif
 
 /* Compiler Attributes */
 
@@ -205,5 +244,11 @@ unmap_file(const char *str, size_t size);
 #else
 # define ATTR_NULL_SENTINEL
 #endif /* GNUC >= 4 */
+
+#if (defined(__GNUC__) && (__GNUC__ * 100 + __GNUC_MINOR__) >= 295)
+#define ATTR_PACKED  __attribute__((__packed__))
+#else
+#define ATTR_PACKED
+#endif
 
 #endif /* UTILS_H */

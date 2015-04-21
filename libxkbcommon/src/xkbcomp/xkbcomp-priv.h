@@ -56,9 +56,6 @@ XkbFile *
 XkbFileFromComponents(struct xkb_context *ctx,
                       const struct xkb_component_names *kkctgs);
 
-void
-XkbEscapeMapName(char *name);
-
 bool
 CompileKeycodes(XkbFile *file, struct xkb_keymap *keymap,
                 enum merge_mode merge);
@@ -78,9 +75,6 @@ CompileSymbols(XkbFile *file, struct xkb_keymap *keymap,
 bool
 CompileKeymap(XkbFile *file, struct xkb_keymap *keymap,
               enum merge_mode merge);
-
-bool
-LookupKeysym(const char *str, xkb_keysym_t *sym_rtrn);
 
 /***====================================================================***/
 
