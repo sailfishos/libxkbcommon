@@ -207,29 +207,16 @@ const LookupEntry symInterpretMatchMaskNames[] = {
 };
 
 const char *
-ModIndexText(const struct xkb_keymap *keymap, xkb_mod_index_t ndx)
+ModIndexText(struct xkb_context *ctx, const struct xkb_mod_set *mods,
+             xkb_mod_index_t ndx)
 {
     if (ndx == XKB_MOD_INVALID)
         return "none";
 
-    if (ndx >= darray_size(keymap->mods))
+    if (ndx >= mods->num_mods)
         return NULL;
 
-    return xkb_atom_text(keymap->ctx, darray_item(keymap->mods, ndx).name);
-}
-
-xkb_mod_index_t
-ModNameToIndex(const struct xkb_keymap *keymap, xkb_atom_t name,
-               enum mod_type type)
-{
-    xkb_mod_index_t i;
-    const struct xkb_mod *mod;
-
-    darray_enumerate(i, mod, keymap->mods)
-        if ((mod->type & type) && name == mod->name)
-            return i;
-
-    return XKB_MOD_INVALID;
+    return xkb_atom_text(ctx, mods->mods[ndx].name);
 }
 
 const char *
@@ -264,7 +251,8 @@ SIMatchText(enum xkb_match_operation type)
 }
 
 const char *
-ModMaskText(const struct xkb_keymap *keymap, xkb_mod_mask_t mask)
+ModMaskText(struct xkb_context *ctx, const struct xkb_mod_set *mods,
+            xkb_mod_mask_t mask)
 {
     char buf[1024];
     size_t pos = 0;
@@ -277,22 +265,22 @@ ModMaskText(const struct xkb_keymap *keymap, xkb_mod_mask_t mask)
     if (mask == MOD_REAL_MASK_ALL)
         return "all";
 
-    darray_enumerate(i, mod, keymap->mods) {
+    xkb_mods_enumerate(i, mod, mods) {
         int ret;
 
-        if (!(mask & (1 << i)))
+        if (!(mask & (1u << i)))
             continue;
 
         ret = snprintf(buf + pos, sizeof(buf) - pos, "%s%s",
                        pos == 0 ? "" : "+",
-                       xkb_atom_text(keymap->ctx, mod->name));
+                       xkb_atom_text(ctx, mod->name));
         if (ret <= 0 || pos + ret >= sizeof(buf))
             break;
         else
             pos += ret;
     }
 
-    return strcpy(xkb_context_get_buffer(keymap->ctx, pos + 1), buf);
+    return strcpy(xkb_context_get_buffer(ctx, pos + 1), buf);
 }
 
 const char *
@@ -307,14 +295,14 @@ LedStateMaskText(struct xkb_context *ctx, enum xkb_state_component mask)
     for (unsigned i = 0; mask; i++) {
         int ret;
 
-        if (!(mask & (1 << i)))
+        if (!(mask & (1u << i)))
             continue;
 
-        mask &= ~(1 << i);
+        mask &= ~(1u << i);
 
         ret = snprintf(buf + pos, sizeof(buf) - pos, "%s%s",
                        pos == 0 ? "" : "+",
-                       LookupValue(modComponentMaskNames, 1 << i));
+                       LookupValue(modComponentMaskNames, 1u << i));
         if (ret <= 0 || pos + ret >= sizeof(buf))
             break;
         else
@@ -339,14 +327,14 @@ ControlMaskText(struct xkb_context *ctx, enum xkb_action_controls mask)
     for (unsigned i = 0; mask; i++) {
         int ret;
 
-        if (!(mask & (1 << i)))
+        if (!(mask & (1u << i)))
             continue;
 
-        mask &= ~(1 << i);
+        mask &= ~(1u << i);
 
         ret = snprintf(buf + pos, sizeof(buf) - pos, "%s%s",
                        pos == 0 ? "" : "+",
-                       LookupValue(ctrlMaskNames, 1 << i));
+                       LookupValue(ctrlMaskNames, 1u << i));
         if (ret <= 0 || pos + ret >= sizeof(buf))
             break;
         else

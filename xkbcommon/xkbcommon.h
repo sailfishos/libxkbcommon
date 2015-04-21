@@ -305,26 +305,60 @@ typedef uint32_t xkb_led_mask_t;
 /**
  * Names to compile a keymap with, also known as RMLVO.
  *
- * These names together are the primary identifier for a keymap.
- * If any of the members is NULL or an empty string (""), a default value is
- * used.  It is recommended to use the system default by passing NULL for
- * unspecified values, instead of providing your own defaults.
+ * The names are the common configuration values by which a user picks
+ * a keymap.
+ *
+ * If the entire struct is NULL, then each field is taken to be NULL.
+ * You should prefer passing NULL instead of choosing your own defaults.
  */
 struct xkb_rule_names {
-    /** The rules file to use. The rules file describes how to interpret
-     *  the values of the model, layout, variant and options fields. */
+    /**
+     * The rules file to use. The rules file describes how to interpret
+     * the values of the model, layout, variant and options fields.
+     *
+     * If NULL or the empty string "", a default value is used.
+     * If the XKB_DEFAULT_RULES environment variable is set, it is used
+     * as the default.  Otherwise the system default is used.
+     */
     const char *rules;
-    /** The keyboard model by which to interpret keycodes and LEDs. */
+    /**
+     * The keyboard model by which to interpret keycodes and LEDs.
+     *
+     * If NULL or the empty string "", a default value is used.
+     * If the XKB_DEFAULT_MODEL environment variable is set, it is used
+     * as the default.  Otherwise the system default is used.
+     */
     const char *model;
-    /** A comma separated list of layouts (languages) to include in the
-     *  keymap. */
+    /**
+     * A comma separated list of layouts (languages) to include in the
+     * keymap.
+     *
+     * If NULL or the empty string "", a default value is used.
+     * If the XKB_DEFAULT_LAYOUT environment variable is set, it is used
+     * as the default.  Otherwise the system default is used.
+     */
     const char *layout;
-    /** A comma separated list of variants, one per layout, which may
-     *  modify or augment the respective layout in various ways. */
+    /**
+     * A comma separated list of variants, one per layout, which may
+     * modify or augment the respective layout in various ways.
+     *
+     * If NULL or the empty string "", and a default value is also used
+     * for the layout, a default value is used.  Otherwise no variant is
+     * used.
+     * If the XKB_DEFAULT_VARIANT environment variable is set, it is used
+     * as the default.  Otherwise the system default is used.
+     */
     const char *variant;
-    /** A comma separated list of options, through which the user specifies
-     *  non-layout related preferences, like which key combinations are used
-     *  for switching layouts, or which key is the Compose key. */
+    /**
+     * A comma separated list of options, through which the user specifies
+     * non-layout related preferences, like which key combinations are used
+     * for switching layouts, or which key is the Compose key.
+     *
+     * If NULL, a default value is used.  If the empty string "", no
+     * options are used.
+     * If the XKB_DEFAULT_OPTIONS environment variable is set, it is used
+     * as the default.  Otherwise the system default is used.
+     */
     const char *options;
 };
 
@@ -334,6 +368,35 @@ struct xkb_rule_names {
  *
  * @{
  */
+
+/**
+ * @page keysym-transformations Keysym Transformations
+ *
+ * Keysym translation is subject to several "keysym transformations",
+ * as described in the XKB specification.  These are:
+ *
+ * - Capitalization transformation.  If the Caps Lock modifier is
+ *   active and was not consumed by the translation process, a single
+ *   keysym is transformed to its upper-case form (if applicable).
+ *   Similarly, the UTF-8/UTF-32 string produced is capitalized.
+ *
+ *   This is described in:
+ *   http://www.x.org/releases/current/doc/kbproto/xkbproto.html#Interpreting_the_Lock_Modifier
+ *
+ * - Control transformation.  If the Control modifier is active and
+ *   was not consumed by the translation process, the string produced
+ *   is transformed to its matching ASCII control character (if
+ *   applicable).  Keysyms are not affected.
+ *
+ *   This is described in:
+ *   http://www.x.org/releases/current/doc/kbproto/xkbproto.html#Interpreting_the_Control_Modifier
+ *
+ * Each relevant function discusses which transformations it performs.
+ *
+ * These transformations are not applicable when a key produces multiple
+ * keysyms.
+ */
+
 
 /**
  * Get the name of a keysym.
@@ -399,6 +462,11 @@ xkb_keysym_from_name(const char *name, enum xkb_keysym_flags flags);
  * @returns The number of bytes written to the buffer (including the
  * terminating byte).  If the keysym does not have a Unicode
  * representation, returns 0.  If the buffer is too small, returns -1.
+ *
+ * This function does not perform any @ref keysym-transformations.
+ * Therefore, prefer to use xkb_state_key_get_utf8() if possible.
+ *
+ * @sa xkb_state_key_get_utf8()
  */
 int
 xkb_keysym_to_utf8(xkb_keysym_t keysym, char *buffer, size_t size);
@@ -409,6 +477,11 @@ xkb_keysym_to_utf8(xkb_keysym_t keysym, char *buffer, size_t size);
  * @returns The Unicode/UTF-32 representation of keysym, which is also
  * compatible with UCS-4.  If the keysym does not have a Unicode
  * representation, returns 0.
+ *
+ * This function does not perform any @ref keysym-transformations.
+ * Therefore, prefer to use xkb_state_key_get_utf32() if possible.
+ *
+ * @sa xkb_state_key_get_utf32()
  */
 uint32_t
 xkb_keysym_to_utf32(xkb_keysym_t keysym);
@@ -431,8 +504,11 @@ enum xkb_context_flags {
     XKB_CONTEXT_NO_FLAGS = 0,
     /** Create this context with an empty include path. */
     XKB_CONTEXT_NO_DEFAULT_INCLUDES = (1 << 0),
-    /** Don't take RMLVO names from the environment. */
-    XKB_CONTEXT_NO_ENVIRONMENT_NAMES = (1 << 1),
+    /**
+     * Don't take RMLVO names from the environment.
+     * @since 0.3.0
+     */
+    XKB_CONTEXT_NO_ENVIRONMENT_NAMES = (1 << 1)
 };
 
 /**
@@ -681,9 +757,7 @@ xkb_context_set_log_fn(struct xkb_context *context,
 /** Flags for keymap compilation. */
 enum xkb_keymap_compile_flags {
     /** Do not apply any flags. */
-    XKB_MAP_COMPILE_NO_FLAGS = 0,
-    /** Apparently you can't have empty enums.  What a drag. */
-    XKB_MAP_COMPILE_PLACEHOLDER = 0
+    XKB_KEYMAP_COMPILE_NO_FLAGS = 0
 };
 
 /**
@@ -692,13 +766,8 @@ enum xkb_keymap_compile_flags {
  * The primary keymap entry point: creates a new XKB keymap from a set of
  * RMLVO (Rules + Model + Layouts + Variants + Options) names.
  *
- * You should almost certainly be using this and nothing else to create
- * keymaps.
- *
  * @param context The context in which to create the keymap.
- * @param names   The RMLVO names to use.  In xkbcommon versions prior
- *                to 0.2.1, this field must be non-NULL.  In later
- *                versions, passing NULL will use the default keymap.
+ * @param names   The RMLVO names to use.  See xkb_rule_names.
  * @param flags   Optional flags for the keymap, or 0.
  *
  * @returns A keymap compiled according to the RMLVO names, or NULL if
@@ -747,7 +816,7 @@ xkb_keymap_new_from_file(struct xkb_context *context, FILE *file,
  * This is just like xkb_keymap_new_from_file(), but instead of a file, gets
  * the keymap as one enormous string.
  *
- * @see xkb_keymap_new_from_string()
+ * @see xkb_keymap_new_from_file()
  * @memberof xkb_keymap
  */
 struct xkb_keymap *
@@ -763,6 +832,7 @@ xkb_keymap_new_from_string(struct xkb_context *context, const char *string,
  *
  * @see xkb_keymap_new_from_string()
  * @memberof xkb_keymap
+ * @since 0.3.0
  */
 struct xkb_keymap *
 xkb_keymap_new_from_buffer(struct xkb_context *context, const char *buffer,
@@ -831,6 +901,7 @@ xkb_keymap_get_as_string(struct xkb_keymap *keymap,
  *
  * @sa xkb_keycode_t
  * @memberof xkb_keymap
+ * @since 0.3.1
  */
 xkb_keycode_t
 xkb_keymap_min_keycode(struct xkb_keymap *keymap);
@@ -840,6 +911,7 @@ xkb_keymap_min_keycode(struct xkb_keymap *keymap);
  *
  * @sa xkb_keycode_t
  * @memberof xkb_keymap
+ * @since 0.3.1
  */
 xkb_keycode_t
 xkb_keymap_max_keycode(struct xkb_keymap *keymap);
@@ -849,6 +921,7 @@ xkb_keymap_max_keycode(struct xkb_keymap *keymap);
  *
  * @sa xkb_keymap_key_for_each
  * @memberof xkb_keymap
+ * @since 0.3.1
  */
 typedef void
 (*xkb_keymap_key_iter_t)(struct xkb_keymap *keymap, xkb_keycode_t key,
@@ -861,6 +934,7 @@ typedef void
  *
  * @sa xkb_keymap_min_keycode() xkb_keymap_max_keycode() xkb_keycode_t
  * @memberof xkb_keymap
+ * @since 0.3.1
  */
 void
 xkb_keymap_key_for_each(struct xkb_keymap *keymap, xkb_keymap_key_iter_t iter,
@@ -932,6 +1006,41 @@ xkb_layout_index_t
 xkb_keymap_layout_get_index(struct xkb_keymap *keymap, const char *name);
 
 /**
+ * Get the number of LEDs in the keymap.
+ *
+ * @warning The range [ 0...xkb_keymap_num_leds() ) includes all of the LEDs
+ * in the keymap, but may also contain inactive LEDs.  When iterating over
+ * this range, you need the handle this case when calling functions such as
+ * xkb_keymap_led_get_name() or xkb_state_led_index_is_active().
+ *
+ * @sa xkb_led_index_t
+ * @memberof xkb_keymap
+ */
+xkb_led_index_t
+xkb_keymap_num_leds(struct xkb_keymap *keymap);
+
+/**
+ * Get the name of a LED by index.
+ *
+ * @returns The name.  If the index is invalid, returns NULL.
+ *
+ * @memberof xkb_keymap
+ */
+const char *
+xkb_keymap_led_get_name(struct xkb_keymap *keymap, xkb_led_index_t idx);
+
+/**
+ * Get the index of a LED by name.
+ *
+ * @returns The index.  If no LED with this name exists, returns
+ * XKB_LED_INVALID.
+ *
+ * @memberof xkb_keymap
+ */
+xkb_led_index_t
+xkb_keymap_led_get_index(struct xkb_keymap *keymap, const char *name);
+
+/**
  * Get the number of layouts for a specific key.
  *
  * This number can be different from xkb_keymap_num_layouts(), but is always
@@ -971,8 +1080,8 @@ xkb_keymap_num_levels_for_key(struct xkb_keymap *keymap, xkb_keycode_t key,
  * @param[in] layout    The layout for which to get the keysyms.
  * @param[in] level     The shift level in the layout for which to get the
  * keysyms. This must be smaller than:
- * @code xkb_keymap_num_layouts_for_key(keymap, key) @endcode
- * @param[out] syms_out An immutible array of keysyms corresponding to the
+ * @code xkb_keymap_num_levels_for_key(keymap, key) @endcode
+ * @param[out] syms_out An immutable array of keysyms corresponding to the
  * key in the given layout and shift level.
  *
  * If @c layout is out of range for this key (that is, larger or equal to
@@ -992,41 +1101,6 @@ xkb_keymap_key_get_syms_by_level(struct xkb_keymap *keymap,
                                  xkb_layout_index_t layout,
                                  xkb_level_index_t level,
                                  const xkb_keysym_t **syms_out);
-
-/**
- * Get the number of LEDs in the keymap.
- *
- * @warning The range [ 0...xkb_keymap_num_leds() ) includes all of the LEDs
- * in the keymap, but may also contain inactive LEDs.  When iterating over
- * this range, you need the handle this case when calling functions such as
- * xkb_keymap_led_get_name() or xkb_state_led_index_is_active().
- *
- * @sa xkb_led_index_t
- * @memberof xkb_keymap
- */
-xkb_led_index_t
-xkb_keymap_num_leds(struct xkb_keymap *keymap);
-
-/**
- * Get the name of a LED by index.
- *
- * @returns The name.  If the index is invalid, returns NULL.
- *
- * @memberof xkb_keymap
- */
-const char *
-xkb_keymap_led_get_name(struct xkb_keymap *keymap, xkb_led_index_t idx);
-
-/**
- * Get the index of a LED by name.
- *
- * @returns The index.  If no LED with this name exists, returns
- * XKB_LED_INVALID.
- *
- * @memberof xkb_keymap
- */
-xkb_led_index_t
-xkb_keymap_led_get_index(struct xkb_keymap *keymap, const char *name);
 
 /**
  * Determine whether a key should repeat or not.
@@ -1159,6 +1233,13 @@ enum xkb_state_component {
  * is pressed twice, it should be released twice; etc. Otherwise (e.g. due
  * to missed input events), situations like "stuck modifiers" may occur.
  *
+ * This function is often used in conjunction with the function
+ * xkb_state_key_get_syms() (or xkb_state_key_get_one_sym()), for example,
+ * when handling a key event.  In this case, you should prefer to get the
+ * keysyms *before* updating the key, such that the keysyms reported for
+ * the key event are not affected by the event itself.  This is the
+ * conventional behavior.
+ *
  * @returns A mask of state components that have changed as a result of
  * the update.  If nothing in the state has changed, returns 0.
  *
@@ -1220,9 +1301,11 @@ xkb_state_update_mask(struct xkb_state *state,
  * key in the given keyboard state.
  *
  * As an extension to XKB, this function can return more than one keysym.
- * If you do not want to handle this case, you should use
- * xkb_state_key_get_one_sym(), which additionally performs transformations
- * which are specific to the one-keysym case.
+ * If you do not want to handle this case, you can use
+ * xkb_state_key_get_one_sym() for a simpler interface.
+ *
+ * This function does not perform any @ref keysym-transformations.
+ * (This might change).
  *
  * @returns The number of keysyms in the syms_out array.  If no keysyms
  * are produced by the key in the given keyboard state, returns 0 and sets
@@ -1235,6 +1318,52 @@ xkb_state_key_get_syms(struct xkb_state *state, xkb_keycode_t key,
                        const xkb_keysym_t **syms_out);
 
 /**
+ * Get the Unicode/UTF-8 string obtained from pressing a particular key
+ * in a given keyboard state.
+ *
+ * @param[in]  state  The keyboard state object.
+ * @param[in]  key    The keycode of the key.
+ * @param[out] buffer A buffer to write the string into.
+ * @param[in]  size   Size of the buffer.
+ *
+ * @warning If the buffer passed is too small, the string is truncated
+ * (though still NUL-terminated).
+ *
+ * @returns The number of bytes required for the string, excluding the
+ * NUL byte.  If there is nothing to write, returns 0.
+ *
+ * You may check if truncation has occurred by comparing the return value
+ * with the size of @p buffer, similarly to the snprintf(3) function.
+ * You may safely pass NULL and 0 to @p buffer and @p size to find the
+ * required size (without the NUL-byte).
+ *
+ * This function performs Capitalization and Control @ref
+ * keysym-transformations.
+ *
+ * @memberof xkb_state
+ * @since 0.4.1
+ */
+int
+xkb_state_key_get_utf8(struct xkb_state *state, xkb_keycode_t key,
+                       char *buffer, size_t size);
+
+/**
+ * Get the Unicode/UTF-32 codepoint obtained from pressing a particular
+ * key in a a given keyboard state.
+ *
+ * @returns The UTF-32 representation for the key, if it consists of only
+ * a single codepoint.  Otherwise, returns 0.
+ *
+ * This function performs Capitalization and Control @ref
+ * keysym-transformations.
+ *
+ * @memberof xkb_state
+ * @since 0.4.1
+ */
+uint32_t
+xkb_state_key_get_utf32(struct xkb_state *state, xkb_keycode_t key);
+
+/**
  * Get the single keysym obtained from pressing a particular key in a
  * given keyboard state.
  *
@@ -1245,6 +1374,8 @@ xkb_state_key_get_syms(struct xkb_state *state, xkb_keycode_t key,
  *
  * @returns The keysym.  If the key does not have exactly one keysym,
  * returns XKB_KEY_NoSymbol
+ *
+ * This function performs Capitalization @ref keysym-transformations.
  *
  * @sa xkb_state_key_get_syms()
  * @memberof xkb_state
@@ -1296,8 +1427,8 @@ xkb_state_key_get_level(struct xkb_state *state, xkb_keycode_t key,
                         xkb_layout_index_t layout);
 
 /**
- * Match flags for xkb_state_mod_indices_are_active and
- * xkb_state_mod_names_are_active, specifying how the conditions for a
+ * Match flags for xkb_state_mod_indices_are_active() and
+ * xkb_state_mod_names_are_active(), specifying the conditions for a
  * successful match.  XKB_STATE_MATCH_NON_EXCLUSIVE is bitmaskable with
  * the other modes.
  */
@@ -1426,65 +1557,75 @@ xkb_state_mod_indices_are_active(struct xkb_state *state,
                                  ...);
 
 /**
- * Test whether a modifier is consumed by keyboard state translation for
- * a key.
+ * @page consumed-modifiers Consumed Modifiers
+ * @parblock
  *
  * Some functions, like xkb_state_key_get_syms(), look at the state of
  * the modifiers in the keymap and derive from it the correct shift level
  * to use for the key.  For example, in a US layout, pressing the key
- * labeled \<A\> while the Shift modifier is active, generates the keysym 'A'.
- * In this case, the Shift modifier is said to be consumed.  However, the
- * Num Lock modifier does not affect this translation at all, even if it
- * active, so it is not consumed by this translation.
+ * labeled \<A\> while the Shift modifier is active, generates the keysym
+ * 'A'.  In this case, the Shift modifier is said to be "consumed".
+ * However, the Num Lock modifier does not affect this translation at all,
+ * even if it is active, so it is not consumed by this translation.
  *
  * It may be desirable for some application to not reuse consumed modifiers
- * for further processing, e.g. for hotkeys or keyboard shortcuts. To
+ * for further processing, e.g. for hotkeys or keyboard shortcuts.  To
  * understand why, consider some requirements from a standard shortcut
  * mechanism, and how they are implemented:
  *
- * 1. The shortcut's modifiers must match exactly to the state. For example,
- *    it is possible to bind separate actions to \<Alt\>\<Tab\> and to
- *    \<Alt\>\<Shift\>\<Tab\>. Further, if only \<Alt\>\<Tab\> is bound to
- *    an action, pressing \<Alt\>\<Shift\>\<Tab\> should not trigger the
- *    shortcut.
+ * 1. The shortcut's modifiers must match exactly to the state.  For
+ *    example, it is possible to bind separate actions to \<Alt\>\<Tab\>
+ *    and to \<Alt\>\<Shift\>\<Tab\>.  Further, if only \<Alt\>\<Tab\> is
+ *    bound to an action, pressing \<Alt\>\<Shift\>\<Tab\> should not
+ *    trigger the shortcut.
  *    Effectively, this means that the modifiers are compared using the
  *    equality operator (==).
- * 2. Only relevant modifiers are considered for the matching. For example,
+ *
+ * 2. Only relevant modifiers are considered for the matching.  For example,
  *    Caps Lock and Num Lock should not generally affect the matching, e.g.
  *    when matching \<Alt\>\<Tab\> against the state, it does not matter
- *    whether Num Lock is active or not. These relevant, or significant,
+ *    whether Num Lock is active or not.  These relevant, or "significant",
  *    modifiers usually include Alt, Control, Shift, Super and similar.
  *    Effectively, this means that non-significant modifiers are masked out,
  *    before doing the comparison as described above.
- * 3. The matching must be independent of the layout/keymap. For example,
+ *
+ * 3. The matching must be independent of the layout/keymap.  For example,
  *    the \<Plus\> (+) symbol is found on the first level on some layouts,
- *    and requires holding Shift on others. If you simply bind the action
+ *    but requires holding Shift on others.  If you simply bind the action
  *    to the \<Plus\> keysym, it would work for the unshifted kind, but
- *    not for the others, because the match against Shift would fail. If
+ *    not for the others, because the match against Shift would fail.  If
  *    you bind the action to \<Shift\>\<Plus\>, only the shifted kind would
- *    work. So what is needed is to recognize that Shift is used up in the
+ *    work.  So what is needed is to recognize that Shift is used up in the
  *    translation of the keysym itself, and therefore should not be included
  *    in the matching.
  *    Effectively, this means that consumed modifiers (Shift in this example)
  *    are masked out as well, before doing the comparison.
  *
- * To summarize, this is how the matching would be performed:
+ * In summary, this is how the matching would be performed:
  * @code
  *   (keysym == shortcut_keysym) &&
- *   ((state_modifiers & ~consumed_modifiers & significant_modifiers) == shortcut_modifiers)
+ *   ((state_mods & ~consumed_mods & significant_mods) == shortcut_mods)
  * @endcode
  *
- * @c state_modifiers are the modifiers reported by
+ * @c state_mods are the modifiers reported by
  * xkb_state_mod_index_is_active() and similar functions.
- * @c consumed_modifiers are the modifiers reported by
- * xkb_state_mod_index_is_consumed().
- * @c significant_modifiers are decided upon by the application/toolkit/user;
+ * @c consumed_mods are the modifiers reported by
+ * xkb_state_mod_index_is_consumed() and similar functions.
+ * @c significant_mods are decided upon by the application/toolkit/user;
  * it is up to them to decide whether these are configurable or hard-coded.
+ *
+ * @endparblock
+ */
+
+/**
+ * Test whether a modifier is consumed by keyboard state translation for
+ * a key.
  *
  * @returns 1 if the modifier is consumed, 0 if it is not.  If the modifier
  * index is not valid in the keymap, returns -1.
  *
  * @sa xkb_state_mod_mask_remove_consumed()
+ * @sa xkb_state_key_get_consumed_mods()
  * @memberof xkb_state
  */
 int
@@ -1503,6 +1644,18 @@ xkb_state_mod_index_is_consumed(struct xkb_state *state, xkb_keycode_t key,
 xkb_mod_mask_t
 xkb_state_mod_mask_remove_consumed(struct xkb_state *state, xkb_keycode_t key,
                                    xkb_mod_mask_t mask);
+
+/**
+ * Get the mask of modifiers consumed by translating a given key.
+ *
+ * @returns a mask of the consumed modifiers.
+ *
+ * @sa xkb_state_mod_index_is_consumed()
+ * @memberof xkb_state
+ * @since 0.4.1
+ */
+xkb_mod_mask_t
+xkb_state_key_get_consumed_mods(struct xkb_state *state, xkb_keycode_t key);
 
 /**
  * Test whether a layout is active in a given keyboard state by name.

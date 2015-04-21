@@ -22,7 +22,7 @@ dnl Process this file with autoconf to create configure.
 
 # Initialize Autoconf
 AC_PREREQ([2.62])
-AC_INIT([libxkbcommon], [0.3.2],
+AC_INIT([libxkbcommon], [0.5.0],
         [https://bugs.freedesktop.org/enter_bug.cgi?product=libxkbcommon],
         [libxkbcommon], [http://xkbcommon.org])
 AC_CONFIG_SRCDIR([Makefile.am])
@@ -62,39 +62,71 @@ PKG_PROG_PKG_CONFIG
 # Note: we use some yacc extensions, which work with either GNU bison
 # (preferred) or byacc. Other yacc's may or may not work.
 AC_PROG_YACC
-AC_PATH_PROG([YACC_INST], $YACC)
-if test ! -f "src/xkbcomp/parser.c"; then
-   if test -z "$YACC_INST"; then
-      AC_MSG_ERROR([yacc not found - unable to compile src/xkbcomp/parser.y])
-   fi
-fi
+AC_PATH_PROG([YACC_INST], [$YACC])
+AS_IF([test ! -f "src/xkbcomp/parser.c" -a "x$YACC_INST" = x], [
+    AC_MSG_ERROR([yacc not found - unable to compile src/xkbcomp/parser.y])
+])
 
 # Checks for library functions.
 AC_CHECK_FUNCS([strcasecmp strncasecmp])
-if test "x$ac_cv_func_strcasecmp" = xno || \
-   test "x$ac_cv_func_strncasecmp" = xno; then
+AS_IF([test "x$ac_cv_func_strcasecmp" = xno -o \
+            "x$ac_cv_func_strncasecmp" = xno], [
     AC_MSG_ERROR([C library does not support strcasecmp/strncasecmp])
-fi
+])
 
 AC_CHECK_FUNCS([eaccess euidaccess mmap])
+
+AC_CHECK_FUNCS([secure_getenv __secure_getenv])
+AS_IF([test "x$ac_cv_func_secure_getenv" = xno -a \
+            "x$ac_cv_func___secure_getenv" = xno], [
+    AC_MSG_WARN([C library does not support secure_getenv, using getenv instead])
+])
+
+AX_GCC_BUILTIN(__builtin_expect)
 
 # Some tests use Linux-specific headers
 AC_CHECK_HEADER([linux/input.h])
 AM_CONDITIONAL(BUILD_LINUX_TESTS, [test "x$ac_cv_header_linux_input_h" = xyes])
 
 XORG_TESTSET_CFLAG([BASE_CFLAGS], [-fvisibility=hidden])
+XORG_TESTSET_CFLAG([BASE_CFLAGS], [-Wextra -Wno-unused-parameter -Wno-missing-field-initializers])
+XORG_TESTSET_CFLAG([BASE_CFLAGS], [-Wdocumentation])
+
+# OpenBSD does not have DT_NEEDED entries for libc by design
+# so when these flags are passed to ld via libtool the checks will fail
+case "$host_os" in
+openbsd*)
+    ;;
+*)
+    XORG_CHECK_LINKER_FLAGS([-Wl,--no-undefined], [have_no_undefined=yes]) ;;
+esac
+
+AM_CONDITIONAL([HAVE_NO_UNDEFINED], [test "x$have_no_undefined" = xyes])
+
+AC_CHECK_LIB(rt, clock_gettime,
+    [AC_SUBST(RT_LIBS, "-lrt")],
+    [AC_SUBST(RT_LIBS, "")],
+    [-lrt])
 
 # Define a configuration option for the XKB config root
 xkb_base=`$PKG_CONFIG --variable=xkb_base xkeyboard-config`
-if test "x$xkb_base" = x; then
-    xkb_base=$datadir/X11/xkb
-fi
+AS_IF([test "x$xkb_base" = x], [
+    xkb_base="$datadir/X11/xkb"
+])
 AC_ARG_WITH([xkb_config_root],
     [AS_HELP_STRING([--with-xkb-config-root=<path>],
         [Set default XKB config root (default: xkeyboard-config install path)])],
     [XKBCONFIGROOT="$withval"],
     [XKBCONFIGROOT="$xkb_base"])
 AC_SUBST([XKBCONFIGROOT])
+
+# Define a configuration option for the X locale directory for compose
+AC_ARG_WITH([x_locale_root],
+    [AS_HELP_STRING([--with-x-locale-root=<path>],
+        [Set X locale root (default: $datadir/X11/locale)])],
+    [XLOCALEDIR="$withval"],
+    [XLOCALEDIR="$datadir/X11/locale"])
+AC_SUBST([XLOCALEDIR])
 
 AC_ARG_WITH([default_rules],
     [AS_HELP_STRING([--with-default-rules=<path>],
@@ -124,26 +156,59 @@ AC_ARG_WITH([default_variant],
     [AS_HELP_STRING([--with-default-variant=<path>],
         [Default XKB variant (default: (none))])],
     [DEFAULT_XKB_VARIANT="$withval"],
-    [DEFAULT_XKB_VARAINT=])
-if ! test "x$DEFAULT_XKB_VARIANT" = x; then
+    [DEFAULT_XKB_VARIANT=])
+AS_IF([test "x$DEFAULT_XKB_VARIANT" != x], [
     AC_DEFINE_UNQUOTED([DEFAULT_XKB_VARIANT], ["$DEFAULT_XKB_VARIANT"],
                        [Default XKB variant])
-fi
+])
 
 AC_ARG_WITH([default_options],
     [AS_HELP_STRING([--with-default-options=<path>],
         [Default XKB options (default: (none))])],
     [DEFAULT_XKB_OPTIONS="$withval"],
     [DEFAULT_XKB_OPTIONS=])
-if ! test "x$DEFAULT_XKB_OPTIONS" = x; then
+AS_IF([test "x$DEFAULT_XKB_OPTIONS" != x], [
     AC_DEFINE_UNQUOTED([DEFAULT_XKB_OPTIONS], ["$DEFAULT_XKB_OPTIONS"],
                        [Default XKB options])
-fi
+])
+
+AC_ARG_ENABLE([x11],
+    [AS_HELP_STRING([--disable-x11],
+        [Disable support for creating keymaps with the X11 protocol (default: enabled)])],
+    [], [enable_x11=yes])
+AS_IF([test "x$enable_x11" = xyes], [
+    PKG_CHECK_MODULES([XCB_XKB], [xcb xcb-xkb >= 1.10], [],
+        [AC_MSG_ERROR([xkbcommon-x11 requires xcb-xkb >= 1.10 which was not found. \
+You can disable X11 support with --disable-x11.])])
+], [enable_x11=no])
+AM_CONDITIONAL([ENABLE_X11], [test "x$enable_x11" = xyes])
 
 AC_CONFIG_FILES([
     Makefile
     xkbcommon-uninstalled.pc
     xkbcommon.pc
+    xkbcommon-x11.pc
+    xkbcommon-x11-uninstalled.pc
     doc/Doxyfile
 ])
 AC_OUTPUT
+
+AC_MSG_RESULT([
+        $PACKAGE_NAME $VERSION
+
+        libxkbcommon:            yes
+        libxkbcommon-x11:        ${enable_x11}
+        documentation:           ${build_docs}
+
+        default XKB rules:       ${DEFAULT_XKB_RULES}
+        default XKB model:       ${DEFAULT_XKB_MODEL}
+        default XKB layout:      ${DEFAULT_XKB_LAYOUT}
+        default XKB variant:     ${DEFAULT_XKB_VARIANT}
+        default XKB options:     ${DEFAULT_XKB_OPTIONS}
+
+        prefix:                  ${prefix}
+        includedir:              ${includedir}
+        lib dir:                 ${libdir}
+        XKB config root:         ${XKBCONFIGROOT}
+        X11 locale root:         ${XLOCALEDIR}
+])

@@ -54,183 +54,10 @@
 #include "vmod.h"
 #include "include.h"
 
-/*
- * The xkb_compat section
- * =====================
- * This section is the third to be processed, after xkb_keycodes and
- * xkb_types.
- *
- * Interpret statements
- * --------------------
- * Statements of the form:
- *      interpret Num_Lock+Any { ... }
- *      interpret Shift_Lock+AnyOf(Shift+Lock) { ... }
- *
- * The xkb_symbols section (see symbols.c) allows the keymap author to do,
- * among other things, the following for each key:
- * - Bind an action, like SetMods or LockGroup, to the key. Actions, like
- *   symbols, are specified for each level of each group in the key
- *   separately.
- * - Add a virtual modifier to the key's virtual modifier mapping (vmodmap).
- * - Specify whether the key should repeat or not.
- *
- * However, doing this for each key (or level) is tedious and inflexible.
- * Interpret's are a mechanism to apply these settings to a bunch of
- * keys/levels at once.
- *
- * Each interpret specifies a condition by which it attaches to certain
- * levels. The condition consists of two parts:
- * - A keysym. If the level has a different (or more than one) keysym, the
- *   match failes. Leaving out the keysym is equivalent to using the
- *   NoSymbol keysym, which always matches successfully.
- * - A modifier predicate. The predicate consists of a matching operation
- *   and a mask of (real) modifiers. The modifers are matched against the
- *   key's modifier map (modmap). The matching operation can be one of the
- *   following:
- *   + AnyOfOrNone - The modmap must either be empty or include at least
- *     one of the specified modifiers.
- *   + AnyOf - The modmap must include at least one of the specified
- *     modifiers.
- *   + NoneOf - The modmap must not include any of the specified modifiers.
- *   + AllOf - The modmap must include all of the specified modifiers (but
- *     may include others as well).
- *   + Exactly - The modmap must be exactly the same as the specified
- *     modifiers.
- *   Leaving out the predicate is equivalent to usign AnyOfOrNone while
- *   specifying all modifiers. Leaving out just the matching condtition
- *   is equivalent to using Exactly.
- * An interpret may also include "useModMapMods = level1;" - see below.
- *
- * If a level fulfils the conditions of several interpret's, only the
- * most specific one is used:
- * - A specific keysym will always match before a generic NoSymbol
- *   condition.
- * - If the keysyms are the same, the interpret with the more specific
- *   matching operation is used. The above list is sorted from least to
- *   most specific.
- * - If both the keysyms and the matching operations are the same (but the
- *   modifiers are different), the first interpret is used.
- *
- * As described above, once an interpret "attaches" to a level, it can bind
- * an action to that level, add one virtual modifier to the key's vmodmap,
- * or set the key's repeat setting. You should note the following:
- * - The key repeat is a property of the entire key; it is not level-specific.
- *   In order to avoid confusion, it is only inspected for the first level of
- *   the first group; the interpret's repeat setting is ignored when applied
- *   to other levels.
- * - If one of the above fields was set directly for a key in xkb_symbols,
- *   the explicit setting takes precedence over the interpret.
- *
- * The body of the statment may include statements of the following
- * forms (all of which are optional):
- *
- * - useModMapMods statement:
- *      useModMapMods = level1;
- *
- *   When set to 'level1', the interpret will only match levels which are
- *   the first level of the first group of the keys. This can be useful in
- *   conjunction with e.g. a virtualModifier statement.
- *
- * - action statement:
- *      action = LockMods(modifiers=NumLock);
- *
- *   Bind this action to the matching levels.
- *
- * - virtual modifier statement:
- *      virtualModifier = NumLock;
- *
- *   Add this virtual modifier to the key's vmodmap. The given virtual
- *   modifier must be declared at the top level of the file with a
- *   virtual_modifiers statement, e.g.:
- *      virtual_modifiers NumLock;
- *
- * - repeat statement:
- *      repeat = True;
- *
- *   Set whether the key should repeat or not. Must be a boolean value.
- *
- * Led map statements
- * ------------------------
- * Statements of the form:
- *      indicator "Shift Lock" { ... }
- *
- *   This statement specifies the behavior and binding of the LED (a.k.a
- *   indicator) with the given name ("Shift Lock" above). The name should
- *   have been declared previously in the xkb_keycodes section (see Led
- *   name statement), and given an index there. If it wasn't, it is created
- *   with the next free index.
- *   The body of the statement describes the conditions of the keyboard
- *   state which will cause the LED to be lit. It may include the following
- *   statements:
- *
- * - modifiers statment:
- *      modifiers = ScrollLock;
- *
- *   If the given modifiers are in the required state (see below), the
- *   led is lit.
- *
- * - whichModifierState statment:
- *      whichModState = Latched + Locked;
- *
- *   Can be any combination of:
- *      base, latched, locked, effective
- *      any (i.e. all of the above)
- *      none (i.e. none of the above)
- *      compat (legacy value, treated as effective)
- *   This will cause the respective portion of the modifer state (see
- *   struct xkb_state) to be matched against the modifiers given in the
- *   "modifiers" statement.
- *
- *   Here's a simple example:
- *      indicator "Num Lock" {
- *          modifiers = NumLock;
- *          whichModState = Locked;
- *      };
- *   Whenever the NumLock modifier is locked, the Num Lock LED will light
- *   up.
- *
- * - groups statment:
- *      groups = All - group1;
- *
- *   If the given groups are in the required state (see below), the led
- *   is lit.
- *
- * - whichGroupState statment:
- *      whichGroupState = Effective;
- *
- *   Can be any combination of:
- *      base, latched, locked, effective
- *      any (i.e. all of the above)
- *      none (i.e. none of the above)
- *   This will cause the respective portion of the group state (see
- *   struct xkb_state) to be matched against the groups given in the
- *   "groups" statement.
- *
- *   Note: the above conditions are disjunctive, i.e. if any of them are
- *   satisfied the led is lit.
- *
- * Virtual modifier statements
- * ---------------------------
- * Statements of the form:
- *     virtual_modifiers LControl;
- *
- * Can appear in the xkb_types, xkb_compat, xkb_symbols sections.
- * TODO
- *
- * Effect on keymap
- * ----------------
- * After all of the xkb_compat sections have been compiled, the following
- * members of struct xkb_keymap are finalized:
- *      darray(struct xkb_sym_interpret) sym_interprets;
- *      darray(struct xkb_led) leds;
- *      char *compat_section_name;
- * TODO: virtual modifiers.
- */
-
 enum si_field {
-    SI_FIELD_VIRTUAL_MOD    = (1 << 0),
-    SI_FIELD_ACTION         = (1 << 1),
-    SI_FIELD_AUTO_REPEAT    = (1 << 2),
+    SI_FIELD_VIRTUAL_MOD = (1 << 0),
+    SI_FIELD_ACTION = (1 << 1),
+    SI_FIELD_AUTO_REPEAT = (1 << 2),
     SI_FIELD_LEVEL_ONE_ONLY = (1 << 3),
 };
 
@@ -242,9 +69,9 @@ typedef struct {
 } SymInterpInfo;
 
 enum led_field {
-    LED_FIELD_MODS       = (1 << 0),
-    LED_FIELD_GROUPS     = (1 << 1),
-    LED_FIELD_CTRLS      = (1 << 2),
+    LED_FIELD_MODS = (1 << 0),
+    LED_FIELD_GROUPS = (1 << 1),
+    LED_FIELD_CTRLS = (1 << 2),
 };
 
 typedef struct {
@@ -260,23 +87,26 @@ typedef struct {
     SymInterpInfo default_interp;
     darray(SymInterpInfo) interps;
     LedInfo default_led;
-    darray(LedInfo) leds;
+    LedInfo leds[XKB_MAX_LEDS];
+    unsigned int num_leds;
     ActionsInfo *actions;
-    struct xkb_keymap *keymap;
+    struct xkb_mod_set mods;
+
+    struct xkb_context *ctx;
 } CompatInfo;
 
 static const char *
 siText(SymInterpInfo *si, CompatInfo *info)
 {
-    char *buf = xkb_context_get_buffer(info->keymap->ctx, 128);
+    char *buf = xkb_context_get_buffer(info->ctx, 128);
 
     if (si == &info->default_interp)
         return "default";
 
     snprintf(buf, 128, "%s+%s(%s)",
-             KeysymText(info->keymap->ctx, si->interp.sym),
+             KeysymText(info->ctx, si->interp.sym),
              SIMatchText(si->interp.match),
-             ModMaskText(info->keymap, si->interp.mods));
+             ModMaskText(info->ctx, &info->mods, si->interp.mods));
 
     return buf;
 }
@@ -284,7 +114,7 @@ siText(SymInterpInfo *si, CompatInfo *info)
 static inline bool
 ReportSINotArray(CompatInfo *info, SymInterpInfo *si, const char *field)
 {
-    return ReportNotArray(info->keymap->ctx, "symbol interpretation", field,
+    return ReportNotArray(info->ctx, "symbol interpretation", field,
                           siText(si, info));
 }
 
@@ -292,7 +122,7 @@ static inline bool
 ReportSIBadType(CompatInfo *info, SymInterpInfo *si, const char *field,
                 const char *wanted)
 {
-    return ReportBadType(info->keymap->ctx, "symbol interpretation", field,
+    return ReportBadType(info->ctx, "symbol interpretation", field,
                          siText(si, info), wanted);
 }
 
@@ -300,25 +130,26 @@ static inline bool
 ReportLedBadType(CompatInfo *info, LedInfo *ledi, const char *field,
                  const char *wanted)
 {
-    return ReportBadType(info->keymap->ctx, "indicator map", field,
-                         xkb_atom_text(info->keymap->ctx, ledi->led.name),
+    return ReportBadType(info->ctx, "indicator map", field,
+                         xkb_atom_text(info->ctx, ledi->led.name),
                          wanted);
 }
 
 static inline bool
 ReportLedNotArray(CompatInfo *info, LedInfo *ledi, const char *field)
 {
-    return ReportNotArray(info->keymap->ctx, "indicator map", field,
-                          xkb_atom_text(info->keymap->ctx, ledi->led.name));
+    return ReportNotArray(info->ctx, "indicator map", field,
+                          xkb_atom_text(info->ctx, ledi->led.name));
 }
 
 static void
-InitCompatInfo(CompatInfo *info, struct xkb_keymap *keymap,
-               ActionsInfo *actions)
+InitCompatInfo(CompatInfo *info, struct xkb_context *ctx,
+               ActionsInfo *actions, const struct xkb_mod_set *mods)
 {
     memset(info, 0, sizeof(*info));
-    info->keymap = keymap;
+    info->ctx = ctx;
     info->actions = actions;
+    info->mods = *mods;
     info->default_interp.merge = MERGE_OVERRIDE;
     info->default_interp.interp.virtual_mod = XKB_MOD_INVALID;
     info->default_led.merge = MERGE_OVERRIDE;
@@ -329,7 +160,6 @@ ClearCompatInfo(CompatInfo *info)
 {
     free(info->name);
     darray_free(info->interps);
-    darray_free(info->leds);
 }
 
 static SymInterpInfo *
@@ -369,13 +199,13 @@ AddInterp(CompatInfo *info, SymInterpInfo *new, bool same_file)
 {
     SymInterpInfo *old = FindMatchingInterp(info, new);
     if (old) {
-        const int verbosity = xkb_context_get_log_verbosity(info->keymap->ctx);
+        const int verbosity = xkb_context_get_log_verbosity(info->ctx);
         const bool report = (same_file && verbosity > 0) || verbosity > 9;
         enum si_field collide = 0;
 
         if (new->merge == MERGE_REPLACE) {
             if (report)
-                log_warn(info->keymap->ctx,
+                log_warn(info->ctx,
                          "Multiple definitions for \"%s\"; "
                          "Earlier interpretation ignored\n",
                          siText(new, info));
@@ -405,7 +235,7 @@ AddInterp(CompatInfo *info, SymInterpInfo *new, bool same_file)
         }
 
         if (collide) {
-            log_warn(info->keymap->ctx,
+            log_warn(info->ctx,
                      "Multiple interpretations of \"%s\"; "
                      "Using %s definition for duplicate fields\n",
                      siText(new, info),
@@ -432,19 +262,17 @@ ResolveStateAndPredicate(ExprDef *expr, enum xkb_match_operation *pred_rtrn,
     }
 
     *pred_rtrn = MATCH_EXACTLY;
-    if (expr->op == EXPR_ACTION_DECL) {
-        const char *pred_txt = xkb_atom_text(info->keymap->ctx,
-                                             expr->value.action.name);
+    if (expr->expr.op == EXPR_ACTION_DECL) {
+        const char *pred_txt = xkb_atom_text(info->ctx, expr->action.name);
         if (!LookupString(symInterpretMatchMaskNames, pred_txt, pred_rtrn)) {
-            log_err(info->keymap->ctx,
+            log_err(info->ctx,
                     "Illegal modifier predicate \"%s\"; Ignored\n", pred_txt);
             return false;
         }
-        expr = expr->value.action.args;
+        expr = expr->action.args;
     }
-    else if (expr->op == EXPR_IDENT) {
-        const char *pred_txt = xkb_atom_text(info->keymap->ctx,
-                                             expr->value.str);
+    else if (expr->expr.op == EXPR_IDENT) {
+        const char *pred_txt = xkb_atom_text(info->ctx, expr->ident.ident);
         if (pred_txt && istreq(pred_txt, "any")) {
             *pred_rtrn = MATCH_ANY;
             *mods_rtrn = MOD_REAL_MASK_ALL;
@@ -452,7 +280,8 @@ ResolveStateAndPredicate(ExprDef *expr, enum xkb_match_operation *pred_rtrn,
         }
     }
 
-    return ExprResolveModMask(info->keymap, expr, MOD_REAL, mods_rtrn);
+    return ExprResolveModMask(info->ctx, expr, MOD_REAL, &info->mods,
+                              mods_rtrn);
 }
 
 /***====================================================================***/
@@ -478,13 +307,13 @@ UseNewLEDField(enum led_field field, LedInfo *old, LedInfo *new,
 static bool
 AddLedMap(CompatInfo *info, LedInfo *new, bool same_file)
 {
-    LedInfo *old;
     enum led_field collide;
-    struct xkb_context *ctx = info->keymap->ctx;
-    const int verbosity = xkb_context_get_log_verbosity(ctx);
+    const int verbosity = xkb_context_get_log_verbosity(info->ctx);
     const bool report = (same_file && verbosity > 0) || verbosity > 9;
 
-    darray_foreach(old, info->leds) {
+    for (xkb_led_index_t i = 0; i < info->num_leds; i++) {
+        LedInfo *old = &info->leds[i];
+
         if (old->led.name != new->led.name)
             continue;
 
@@ -499,10 +328,10 @@ AddLedMap(CompatInfo *info, LedInfo *new, bool same_file)
 
         if (new->merge == MERGE_REPLACE) {
             if (report)
-                log_warn(info->keymap->ctx,
+                log_warn(info->ctx,
                          "Map for indicator %s redefined; "
                          "Earlier definition ignored\n",
-                         xkb_atom_text(ctx, old->led.name));
+                         xkb_atom_text(info->ctx, old->led.name));
             *old = *new;
             return true;
         }
@@ -524,17 +353,23 @@ AddLedMap(CompatInfo *info, LedInfo *new, bool same_file)
         }
 
         if (collide) {
-            log_warn(info->keymap->ctx,
+            log_warn(info->ctx,
                      "Map for indicator %s redefined; "
                      "Using %s definition for duplicate fields\n",
-                     xkb_atom_text(ctx, old->led.name),
+                     xkb_atom_text(info->ctx, old->led.name),
                      (new->merge == MERGE_AUGMENT ? "first" : "last"));
         }
 
         return true;
     }
 
-    darray_append(info->leds, *new);
+    if (info->num_leds >= XKB_MAX_LEDS) {
+        log_err(info->ctx,
+                "Too many LEDs defined (maximum %d)\n",
+                XKB_MAX_LEDS);
+        return false;
+    }
+    info->leds[info->num_leds++] = *new;
     return true;
 }
 
@@ -543,28 +378,43 @@ MergeIncludedCompatMaps(CompatInfo *into, CompatInfo *from,
                         enum merge_mode merge)
 {
     SymInterpInfo *si;
-    LedInfo *ledi;
 
     if (from->errorCount > 0) {
         into->errorCount += from->errorCount;
         return;
     }
 
+    into->mods = from->mods;
+
     if (into->name == NULL) {
         into->name = from->name;
         from->name = NULL;
     }
 
-    darray_foreach(si, from->interps) {
-        si->merge = (merge == MERGE_DEFAULT ? si->merge : merge);
-        if (!AddInterp(into, si, false))
-            into->errorCount++;
+    if (darray_empty(into->interps)) {
+        into->interps = from->interps;
+        darray_init(from->interps);
+    }
+    else {
+        darray_foreach(si, from->interps) {
+            si->merge = (merge == MERGE_DEFAULT ? si->merge : merge);
+            if (!AddInterp(into, si, false))
+                into->errorCount++;
+        }
     }
 
-    darray_foreach(ledi, from->leds) {
-        ledi->merge = (merge == MERGE_DEFAULT ? ledi->merge : merge);
-        if (!AddLedMap(into, ledi, false))
-            into->errorCount++;
+    if (into->num_leds == 0) {
+        memcpy(into->leds, from->leds, sizeof(*from->leds) * from->num_leds);
+        into->num_leds = from->num_leds;
+        from->num_leds = 0;
+    }
+    else {
+        for (xkb_led_index_t i = 0; i < from->num_leds; i++) {
+            LedInfo *ledi = &from->leds[i];
+            ledi->merge = (merge == MERGE_DEFAULT ? ledi->merge : merge);
+            if (!AddLedMap(into, ledi, false))
+                into->errorCount++;
+        }
     }
 }
 
@@ -576,7 +426,7 @@ HandleIncludeCompatMap(CompatInfo *info, IncludeStmt *include)
 {
     CompatInfo included;
 
-    InitCompatInfo(&included, info->keymap, info->actions);
+    InitCompatInfo(&included, info->ctx, info->actions, &info->mods);
     included.name = include->stmt;
     include->stmt = NULL;
 
@@ -584,14 +434,14 @@ HandleIncludeCompatMap(CompatInfo *info, IncludeStmt *include)
         CompatInfo next_incl;
         XkbFile *file;
 
-        file = ProcessIncludeFile(info->keymap->ctx, stmt, FILE_TYPE_COMPAT);
+        file = ProcessIncludeFile(info->ctx, stmt, FILE_TYPE_COMPAT);
         if (!file) {
             info->errorCount += 10;
             ClearCompatInfo(&included);
             return false;
         }
 
-        InitCompatInfo(&next_incl, info->keymap, info->actions);
+        InitCompatInfo(&next_incl, info->ctx, info->actions, &included.mods);
         next_incl.default_interp = info->default_interp;
         next_incl.default_interp.merge = stmt->merge;
         next_incl.default_led = info->default_led;
@@ -615,14 +465,14 @@ static bool
 SetInterpField(CompatInfo *info, SymInterpInfo *si, const char *field,
                ExprDef *arrayNdx, ExprDef *value)
 {
-    struct xkb_keymap *keymap = info->keymap;
     xkb_mod_index_t ndx;
 
     if (istreq(field, "action")) {
         if (arrayNdx)
             return ReportSINotArray(info, si, field);
 
-        if (!HandleActionDef(value, keymap, &si->interp.action, info->actions))
+        if (!HandleActionDef(info->ctx, info->actions, &info->mods,
+                             value, &si->interp.action))
             return false;
 
         si->defined |= SI_FIELD_ACTION;
@@ -632,7 +482,7 @@ SetInterpField(CompatInfo *info, SymInterpInfo *si, const char *field,
         if (arrayNdx)
             return ReportSINotArray(info, si, field);
 
-        if (!ExprResolveMod(keymap, value, MOD_VIRT, &ndx))
+        if (!ExprResolveMod(info->ctx, value, MOD_VIRT, &info->mods, &ndx))
             return ReportSIBadType(info, si, field, "virtual modifier");
 
         si->interp.virtual_mod = ndx;
@@ -644,7 +494,7 @@ SetInterpField(CompatInfo *info, SymInterpInfo *si, const char *field,
         if (arrayNdx)
             return ReportSINotArray(info, si, field);
 
-        if (!ExprResolveBoolean(keymap->ctx, value, &set))
+        if (!ExprResolveBoolean(info->ctx, value, &set))
             return ReportSIBadType(info, si, field, "boolean");
 
         si->interp.repeat = set;
@@ -652,7 +502,7 @@ SetInterpField(CompatInfo *info, SymInterpInfo *si, const char *field,
         si->defined |= SI_FIELD_AUTO_REPEAT;
     }
     else if (istreq(field, "locking")) {
-        log_dbg(info->keymap->ctx,
+        log_dbg(info->ctx,
                 "The \"locking\" field in symbol interpretation is unsupported; "
                 "Ignored\n");
     }
@@ -663,14 +513,14 @@ SetInterpField(CompatInfo *info, SymInterpInfo *si, const char *field,
         if (arrayNdx)
             return ReportSINotArray(info, si, field);
 
-        if (!ExprResolveEnum(keymap->ctx, value, &val, useModMapValueNames))
+        if (!ExprResolveEnum(info->ctx, value, &val, useModMapValueNames))
             return ReportSIBadType(info, si, field, "level specification");
 
-        si->interp.level_one_only = !!val;
+        si->interp.level_one_only = val;
         si->defined |= SI_FIELD_LEVEL_ONE_ONLY;
     }
     else {
-        return ReportBadField(keymap->ctx, "symbol interpretation", field,
+        return ReportBadField(info->ctx, "symbol interpretation", field,
                               siText(si, info));
     }
 
@@ -682,13 +532,13 @@ SetLedMapField(CompatInfo *info, LedInfo *ledi, const char *field,
                ExprDef *arrayNdx, ExprDef *value)
 {
     bool ok = true;
-    struct xkb_keymap *keymap = info->keymap;
 
     if (istreq(field, "modifiers") || istreq(field, "mods")) {
         if (arrayNdx)
             return ReportLedNotArray(info, ledi, field);
 
-        if (!ExprResolveModMask(keymap, value, MOD_BOTH, &ledi->led.mods.mods))
+        if (!ExprResolveModMask(info->ctx, value, MOD_BOTH,
+                                &info->mods, &ledi->led.mods.mods))
             return ReportLedBadType(info, ledi, field, "modifier mask");
 
         ledi->defined |= LED_FIELD_MODS;
@@ -699,7 +549,7 @@ SetLedMapField(CompatInfo *info, LedInfo *ledi, const char *field,
         if (arrayNdx)
             return ReportLedNotArray(info, ledi, field);
 
-        if (!ExprResolveMask(keymap->ctx, value, &mask, groupMaskNames))
+        if (!ExprResolveMask(info->ctx, value, &mask, groupMaskNames))
             return ReportLedBadType(info, ledi, field, "group mask");
 
         ledi->led.groups = mask;
@@ -711,14 +561,14 @@ SetLedMapField(CompatInfo *info, LedInfo *ledi, const char *field,
         if (arrayNdx)
             return ReportLedNotArray(info, ledi, field);
 
-        if (!ExprResolveMask(keymap->ctx, value, &mask, ctrlMaskNames))
+        if (!ExprResolveMask(info->ctx, value, &mask, ctrlMaskNames))
             return ReportLedBadType(info, ledi, field, "controls mask");
 
         ledi->led.ctrls = mask;
         ledi->defined |= LED_FIELD_CTRLS;
     }
     else if (istreq(field, "allowexplicit")) {
-        log_dbg(info->keymap->ctx,
+        log_dbg(info->ctx,
                 "The \"allowExplicit\" field in indicator statements is unsupported; "
                 "Ignored\n");
     }
@@ -729,7 +579,7 @@ SetLedMapField(CompatInfo *info, LedInfo *ledi, const char *field,
         if (arrayNdx)
             return ReportLedNotArray(info, ledi, field);
 
-        if (!ExprResolveMask(keymap->ctx, value, &mask,
+        if (!ExprResolveMask(info->ctx, value, &mask,
                              modComponentMaskNames))
             return ReportLedBadType(info, ledi, field,
                                     "mask of modifier state components");
@@ -742,7 +592,7 @@ SetLedMapField(CompatInfo *info, LedInfo *ledi, const char *field,
         if (arrayNdx)
             return ReportLedNotArray(info, ledi, field);
 
-        if (!ExprResolveMask(keymap->ctx, value, &mask,
+        if (!ExprResolveMask(info->ctx, value, &mask,
                              groupComponentMaskNames))
             return ReportLedBadType(info, ledi, field,
                                     "mask of group state components");
@@ -755,21 +605,21 @@ SetLedMapField(CompatInfo *info, LedInfo *ledi, const char *field,
              istreq(field, "leddriveskeyboard") ||
              istreq(field, "indicatordriveskbd") ||
              istreq(field, "indicatordriveskeyboard")) {
-        log_dbg(info->keymap->ctx,
+        log_dbg(info->ctx,
                 "The \"%s\" field in indicator statements is unsupported; "
                 "Ignored\n", field);
     }
     else if (istreq(field, "index")) {
         /* Users should see this, it might cause unexpected behavior. */
-        log_err(info->keymap->ctx,
+        log_err(info->ctx,
                 "The \"index\" field in indicator statements is unsupported; "
                 "Ignored\n");
     }
     else {
-        log_err(info->keymap->ctx,
+        log_err(info->ctx,
                 "Unknown field %s in map for %s indicator; "
                 "Definition ignored\n",
-                field, xkb_atom_text(keymap->ctx, ledi->led.name));
+                field, xkb_atom_text(info->ctx, ledi->led.name));
         ok = false;
     }
 
@@ -783,7 +633,7 @@ HandleGlobalVar(CompatInfo *info, VarDef *stmt)
     ExprDef *ndx;
     bool ret;
 
-    if (!ExprResolveLhs(info->keymap->ctx, stmt->name, &elem, &field, &ndx))
+    if (!ExprResolveLhs(info->ctx, stmt->name, &elem, &field, &ndx))
         ret = false;
     else if (elem && istreq(elem, "interpret"))
         ret = SetInterpField(info, &info->default_interp, field, ndx,
@@ -792,8 +642,8 @@ HandleGlobalVar(CompatInfo *info, VarDef *stmt)
         ret = SetLedMapField(info, &info->default_led, field, ndx,
                              stmt->value);
     else
-        ret = SetActionField(info->keymap, elem, field, ndx, stmt->value,
-                             info->actions);
+        ret = SetActionField(info->ctx, info->actions, &info->mods,
+                             elem, field, ndx, stmt->value);
     return ret;
 }
 
@@ -805,16 +655,15 @@ HandleInterpBody(CompatInfo *info, VarDef *def, SymInterpInfo *si)
     ExprDef *arrayNdx;
 
     for (; def; def = (VarDef *) def->common.next) {
-        if (def->name && def->name->op == EXPR_FIELD_REF) {
-            log_err(info->keymap->ctx,
+        if (def->name && def->name->expr.op == EXPR_FIELD_REF) {
+            log_err(info->ctx,
                     "Cannot set a global default value from within an interpret statement; "
                     "Move statements to the global file scope\n");
             ok = false;
             continue;
         }
 
-        ok = ExprResolveLhs(info->keymap->ctx, def->name, &elem, &field,
-                            &arrayNdx);
+        ok = ExprResolveLhs(info->ctx, def->name, &elem, &field, &arrayNdx);
         if (!ok)
             continue;
 
@@ -832,7 +681,7 @@ HandleInterpDef(CompatInfo *info, InterpDef *def, enum merge_mode merge)
     SymInterpInfo si;
 
     if (!ResolveStateAndPredicate(def->match, &pred, &mods, info)) {
-        log_err(info->keymap->ctx,
+        log_err(info->ctx,
                 "Couldn't determine matching modifiers; "
                 "Symbol interpretation ignored\n");
         return false;
@@ -840,15 +689,7 @@ HandleInterpDef(CompatInfo *info, InterpDef *def, enum merge_mode merge)
 
     si = info->default_interp;
     si.merge = merge = (def->merge == MERGE_DEFAULT ? merge : def->merge);
-
-    if (!LookupKeysym(def->sym, &si.interp.sym)) {
-        log_err(info->keymap->ctx,
-                "Could not resolve keysym %s; "
-                "Symbol interpretation ignored\n",
-                def->sym);
-        return false;
-    }
-
+    si.interp.sym = def->sym;
     si.interp.match = pred;
     si.interp.mods = mods;
 
@@ -883,14 +724,13 @@ HandleLedMapDef(CompatInfo *info, LedMapDef *def, enum merge_mode merge)
     for (var = def->body; var != NULL; var = (VarDef *) var->common.next) {
         const char *elem, *field;
         ExprDef *arrayNdx;
-        if (!ExprResolveLhs(info->keymap->ctx, var->name, &elem, &field,
-                            &arrayNdx)) {
+        if (!ExprResolveLhs(info->ctx, var->name, &elem, &field, &arrayNdx)) {
             ok = false;
             continue;
         }
 
         if (elem) {
-            log_err(info->keymap->ctx,
+            log_err(info->ctx,
                     "Cannot set defaults for \"%s\" element in indicator map; "
                     "Assignment to %s.%s ignored\n", elem, elem, field);
             ok = false;
@@ -925,7 +765,7 @@ HandleCompatMapFile(CompatInfo *info, XkbFile *file, enum merge_mode merge)
             ok = HandleInterpDef(info, (InterpDef *) stmt, merge);
             break;
         case STMT_GROUP_COMPAT:
-            log_dbg(info->keymap->ctx,
+            log_dbg(info->ctx,
                     "The \"group\" statement in compat is unsupported; "
                     "Ignored\n");
             ok = true;
@@ -937,10 +777,10 @@ HandleCompatMapFile(CompatInfo *info, XkbFile *file, enum merge_mode merge)
             ok = HandleGlobalVar(info, (VarDef *) stmt);
             break;
         case STMT_VMOD:
-            ok = HandleVModDef(info->keymap, (VModDef *) stmt);
+            ok = HandleVModDef(info->ctx, &info->mods, (VModDef *) stmt, merge);
             break;
         default:
-            log_err(info->keymap->ctx,
+            log_err(info->ctx,
                     "Compat files may not include other types; "
                     "Ignoring %s\n", stmt_type_to_string(stmt->type));
             ok = false;
@@ -951,7 +791,7 @@ HandleCompatMapFile(CompatInfo *info, XkbFile *file, enum merge_mode merge)
             info->errorCount++;
 
         if (info->errorCount > 10) {
-            log_err(info->keymap->ctx,
+            log_err(info->ctx,
                     "Abandoning compatibility map \"%s\"\n", file->topName);
             break;
         }
@@ -976,34 +816,33 @@ CopyInterps(CompatInfo *info, bool needSymbol, enum xkb_match_operation pred,
 }
 
 static void
-CopyLedMapDefs(CompatInfo *info)
+CopyLedMapDefsToKeymap(struct xkb_keymap *keymap, CompatInfo *info)
 {
-    LedInfo *ledi;
-    xkb_led_index_t i;
-    struct xkb_led *led;
-    struct xkb_keymap *keymap = info->keymap;
+    for (xkb_led_index_t idx = 0; idx < info->num_leds; idx++) {
+        LedInfo *ledi = &info->leds[idx];
+        xkb_led_index_t i;
+        struct xkb_led *led;
 
-    darray_foreach(ledi, info->leds) {
         /*
          * Find the LED with the given name, if it was already declared
          * in keycodes.
          */
-        darray_enumerate(i, led, keymap->leds)
+        xkb_leds_enumerate(i, led, keymap)
             if (led->name == ledi->led.name)
                 break;
 
         /* Not previously declared; create it with next free index. */
-        if (i >= darray_size(keymap->leds)) {
+        if (i >= keymap->num_leds) {
             log_dbg(keymap->ctx,
                     "Indicator name \"%s\" was not declared in the keycodes section; "
                     "Adding new indicator\n",
                     xkb_atom_text(keymap->ctx, ledi->led.name));
 
-            darray_enumerate(i, led, keymap->leds)
+            xkb_leds_enumerate(i, led, keymap)
                 if (led->name == XKB_ATOM_NONE)
                     break;
 
-            if (i >= darray_size(keymap->leds)) {
+            if (i >= keymap->num_leds) {
                 /* Not place to put it; ignore. */
                 if (i >= XKB_MAX_LEDS) {
                     log_err(keymap->ctx,
@@ -1013,9 +852,9 @@ CopyLedMapDefs(CompatInfo *info)
                             xkb_atom_text(keymap->ctx, ledi->led.name));
                     continue;
                 }
+
                 /* Add a new LED. */
-                darray_resize(keymap->leds, i + 1);
-                led = &darray_item(keymap->leds, i);
+                led = &keymap->leds[keymap->num_leds++];
             }
         }
 
@@ -1033,6 +872,8 @@ CopyCompatToKeymap(struct xkb_keymap *keymap, CompatInfo *info)
     keymap->compat_section_name = strdup_safe(info->name);
     XkbEscapeMapName(keymap->compat_section_name);
 
+    keymap->mods = info->mods;
+
     if (!darray_empty(info->interps)) {
         struct collect collect;
         darray_init(collect.sym_interprets);
@@ -1049,11 +890,11 @@ CopyCompatToKeymap(struct xkb_keymap *keymap, CompatInfo *info)
         CopyInterps(info, false, MATCH_ANY, &collect);
         CopyInterps(info, false, MATCH_ANY_OR_NONE, &collect);
 
-        keymap->num_sym_interprets = darray_size(collect.sym_interprets);
-        keymap->sym_interprets = darray_mem(collect.sym_interprets, 0);
+        darray_steal(collect.sym_interprets,
+                     &keymap->sym_interprets, &keymap->num_sym_interprets);
     }
 
-    CopyLedMapDefs(info);
+    CopyLedMapDefsToKeymap(keymap, info);
 
     return true;
 }
@@ -1069,7 +910,7 @@ CompileCompatMap(XkbFile *file, struct xkb_keymap *keymap,
     if (!actions)
         return false;
 
-    InitCompatInfo(&info, keymap, actions);
+    InitCompatInfo(&info, keymap->ctx, actions, &keymap->mods);
     info.default_interp.merge = merge;
     info.default_led.merge = merge;
 
