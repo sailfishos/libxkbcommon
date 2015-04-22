@@ -33,7 +33,7 @@ xkb Development Libraries file.
 %build
 
 CFLAGS="-std=c99" %autogen --disable-static \
-    --with-xkb-config-root=/usr/share/X11/xkb
+    --with-xkb-config-root=/usr/share/X11/xkb --disable-x11
 
 make %{?jobs:-j%jobs}
 
@@ -57,5 +57,6 @@ rm -rf %{buildroot}
 %{_includedir}/xkbcommon/xkbcommon-names.h
 %{_includedir}/xkbcommon/xkbcommon-keysyms.h
 %{_includedir}/xkbcommon/xkbcommon-compat.h
+%{_includedir}/xkbcommon/xkbcommon-compose.h
 %{_libdir}/libxkbcommon.so
 %{_libdir}/pkgconfig/xkbcommon.pc

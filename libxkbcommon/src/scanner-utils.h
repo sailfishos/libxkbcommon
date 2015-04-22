@@ -34,13 +34,13 @@ typedef darray(struct sval) darray_sval;
 static inline bool
 svaleq(struct sval s1, struct sval s2)
 {
-    return s1.len == s2.len && strncmp(s1.start, s2.start, s1.len) == 0;
+    return s1.len == s2.len && memcmp(s1.start, s2.start, s1.len) == 0;
 }
 
 static inline bool
 svaleq_prefix(struct sval s1, struct sval s2)
 {
-    return s1.len <= s2.len && strncmp(s1.start, s2.start, s1.len) == 0;
+    return s1.len <= s2.len && memcmp(s1.start, s2.start, s1.len) == 0;
 }
 
 struct scanner {
@@ -49,16 +49,30 @@ struct scanner {
     size_t len;
     char buf[1024];
     size_t buf_pos;
-    int line, column;
+    unsigned line, column;
     /* The line/column of the start of the current token. */
-    int token_line, token_column;
+    unsigned token_line, token_column;
     const char *file_name;
     struct xkb_context *ctx;
+    void *priv;
 };
+
+#define scanner_log(scanner, level, fmt, ...) \
+    xkb_log((scanner)->ctx, (level), 0, \
+            "%s:%u:%u: " fmt "\n", \
+             (scanner)->file_name, \
+             (scanner)->token_line, (scanner)->token_column, ##__VA_ARGS__)
+
+#define scanner_err(scanner, fmt, ...) \
+    scanner_log(scanner, XKB_LOG_LEVEL_ERROR, fmt, ##__VA_ARGS__)
+
+#define scanner_warn(scanner, fmt, ...) \
+    scanner_log(scanner, XKB_LOG_LEVEL_WARNING, fmt, ##__VA_ARGS__)
 
 static inline void
 scanner_init(struct scanner *s, struct xkb_context *ctx,
-             const char *string, size_t len, const char *file_name)
+             const char *string, size_t len, const char *file_name,
+             void *priv)
 {
     s->s = string;
     s->len = len;
@@ -67,12 +81,15 @@ scanner_init(struct scanner *s, struct xkb_context *ctx,
     s->token_line = s->token_column = 1;
     s->file_name = file_name;
     s->ctx = ctx;
+    s->priv = priv;
 }
 
 static inline char
 peek(struct scanner *s)
 {
-    return s->pos < s->len ? s->s[s->pos] : '\0';
+    if (unlikely(s->pos >= s->len))
+        return '\0';
+    return s->s[s->pos];
 }
 
 static inline bool
@@ -87,12 +104,21 @@ eol(struct scanner *s)
     return peek(s) == '\n';
 }
 
+static inline void
+skip_to_eol(struct scanner *s)
+{
+    const char *nl = memchr(s->s + s->pos, '\n', s->len - s->pos);
+    const size_t new_pos = nl ? (size_t) (nl - s->s) : s->len;
+    s->column += new_pos - s->pos;
+    s->pos = new_pos;
+}
+
 static inline char
 next(struct scanner *s)
 {
-    if (eof(s))
+    if (unlikely(eof(s)))
         return '\0';
-    if (eol(s)) {
+    if (unlikely(eol(s))) {
         s->line++;
         s->column = 1;
     }
@@ -105,7 +131,7 @@ next(struct scanner *s)
 static inline bool
 chr(struct scanner *s, char ch)
 {
-    if (peek(s) != ch)
+    if (likely(peek(s) != ch))
         return false;
     s->pos++; s->column++;
     return true;
@@ -116,7 +142,7 @@ str(struct scanner *s, const char *string, size_t len)
 {
     if (s->len - s->pos < len)
         return false;
-    if (strncasecmp(s->s + s->pos, string, len) != 0)
+    if (memcmp(s->s + s->pos, string, len) != 0)
         return false;
     s->pos += len; s->column += len;
     return true;
@@ -134,11 +160,35 @@ buf_append(struct scanner *s, char ch)
 }
 
 static inline bool
+buf_appends(struct scanner *s, const char *str)
+{
+    int ret;
+    ret = snprintf(s->buf + s->buf_pos, sizeof(s->buf) - s->buf_pos, "%s", str);
+    if (ret < 0 || (size_t) ret >= sizeof(s->buf) - s->buf_pos)
+        return false;
+    s->buf_pos += ret;
+    return true;
+}
+
+static inline bool
 oct(struct scanner *s, uint8_t *out)
 {
     int i;
     for (i = 0, *out = 0; peek(s) >= '0' && peek(s) <= '7' && i < 3; i++)
         *out = *out * 8 + next(s) - '0';
+    return i > 0;
+}
+
+static inline bool
+hex(struct scanner *s, uint8_t *out)
+{
+    int i;
+    for (i = 0, *out = 0; is_xdigit(peek(s)) && i < 2; i++) {
+        const char c = next(s);
+        const char offset = (c >= '0' && c <= '9' ? '0' :
+                             c >= 'a' && c <= 'f' ? 'a' - 10 : 'A' - 10);
+        *out = *out * 16 + c - offset;
+    }
     return i > 0;
 }
 

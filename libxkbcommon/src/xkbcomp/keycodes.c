@@ -29,79 +29,6 @@
 #include "expr.h"
 #include "include.h"
 
-/*
- * The xkb_keycodes section
- * ========================
- *
- * This is the simplest section type, and is the first one to be
- * compiled. The purpose of this is mostly to map between the
- * hardware/evdev scancodes and xkb keycodes. Each key is given a name
- * by which it can be referred to later, e.g. in the symbols section.
- *
- * Keycode statements
- * ------------------
- * Statements of the form:
- *      <TLDE> = 49;
- *      <AE01> = 10;
- *
- * The above would let 49 and 10 be valid keycodes in the keymap, and
- * assign them the names TLDE and AE01 respectively. The format <WXYZ> is
- * always used to refer to a key by name.
- *
- * [ The naming convention <AE01> just denoted the position of the key
- * in the main alphanumric section of the keyboard, with the two letters
- * specifying the row and the two digits specifying the column, from
- * the bottom left.]
- *
- * In the common case this just maps to the evdev scancodes from
- * /usr/include/linux/input.h, e.g. the following definitions:
- *      #define KEY_GRAVE            41
- *      #define KEY_1                2
- * Similar definitions appear in the xf86-input-keyboard driver. Note
- * that in all current keymaps there's a constant offset of 8 (for
- * historical reasons).
- *
- * If there's a conflict, like the same name given to different keycodes,
- * or same keycode given different names, it is resolved according to the
- * merge mode which applies to the definitions.
- *
- * Alias statements
- * ----------------
- * Statements of the form:
- *      alias <MENU> = <COMP>;
- *
- * Allows to refer to a previously defined key (here <COMP>) by another
- * name (here <MENU>). Conflicts are handled similarly.
- *
- * LED name statements
- * -------------------------
- * Statements of the form:
- *      indicator 1 = "Caps Lock";
- *      indicator 2 = "Num Lock";
- *      indicator 3 = "Scroll Lock";
- *
- * Assigns a name to the keyboard LED (a.k.a indicator) with the given index.
- * The led may be referred by this name later in the compat section
- * and by the user.
- *
- * Effect on the keymap
- * --------------------
- * After all of the xkb_keycodes sections have been compiled, the
- * following members of struct xkb_keymap are finalized:
- *      xkb_keycode_t min_key_code;
- *      xkb_keycode_t max_key_code;
- *      unsigned int num_aliases;
- *      struct xkb_key_alias *key_aliases;
- *      char *keycodes_section_name;
- * The 'name' field of leds declared in xkb_keycodes:
- *      darray(struct xkb_led) leds;
- * Further, the array of keys:
- *      struct xkb_key *keys;
- * had been resized to its final size (i.e. all of the xkb_key objects are
- * referable by their keycode). However the objects themselves do not
- * contain any useful information besides the key name at this point.
- */
-
 typedef struct {
     enum merge_mode merge;
 
@@ -122,7 +49,8 @@ typedef struct {
     xkb_keycode_t min_key_code;
     xkb_keycode_t max_key_code;
     darray(xkb_atom_t) key_names;
-    darray(LedNameInfo) led_names;
+    LedNameInfo led_names[XKB_MAX_LEDS];
+    unsigned int num_led_names;
     darray(AliasInfo) aliases;
 
     struct xkb_context *ctx;
@@ -144,10 +72,8 @@ static LedNameInfo *
 FindLedByName(KeyNamesInfo *info, xkb_atom_t name,
               xkb_led_index_t *idx_out)
 {
-    LedNameInfo *ledi;
-    xkb_led_index_t idx;
-
-    darray_enumerate(idx, ledi, info->led_names) {
+    for (xkb_led_index_t idx = 0; idx < info->num_led_names; idx++) {
+        LedNameInfo *ledi = &info->led_names[idx];
         if (ledi->name == name) {
             *idx_out = idx;
             return ledi;
@@ -192,11 +118,11 @@ AddLedName(KeyNamesInfo *info, enum merge_mode merge, bool same_file,
         return true;
     }
 
-    if (new_idx >= darray_size(info->led_names))
-        darray_resize0(info->led_names, new_idx + 1);
+    if (new_idx >= info->num_led_names)
+        info->num_led_names = new_idx + 1;
 
     /* LED with the same index already exists. */
-    old = &darray_item(info->led_names, new_idx);
+    old = &info->led_names[new_idx];
     if (old->name != XKB_ATOM_NONE) {
         if (report) {
             const xkb_atom_t use = (replace ? new->name : old->name);
@@ -213,7 +139,7 @@ AddLedName(KeyNamesInfo *info, enum merge_mode merge, bool same_file,
         return true;
     }
 
-    darray_item(info->led_names, new_idx) = *new;
+    *old = *new;
     return true;
 }
 
@@ -223,7 +149,6 @@ ClearKeyNamesInfo(KeyNamesInfo *info)
     free(info->name);
     darray_free(info->key_names);
     darray_free(info->aliases);
-    darray_free(info->led_names);
 }
 
 static void
@@ -322,7 +247,7 @@ AddKeyName(KeyNamesInfo *info, xkb_keycode_t kc, xkb_atom_t name,
 
 /***====================================================================***/
 
-static int
+static bool
 HandleAliasDef(KeyNamesInfo *info, KeyAliasDef *def, enum merge_mode merge);
 
 static void
@@ -381,15 +306,16 @@ MergeIncludedKeycodes(KeyNamesInfo *into, KeyNamesInfo *from,
     }
 
     /* Merge LED names. */
-    if (darray_empty(into->led_names)) {
-        into->led_names = from->led_names;
-        darray_init(from->led_names);
+    if (into->num_led_names == 0) {
+        memcpy(into->led_names, from->led_names,
+               sizeof(*from->led_names) * from->num_led_names);
+        into->num_led_names = from->num_led_names;
+        from->num_led_names = 0;
     }
     else {
-        xkb_led_index_t idx;
-        LedNameInfo *ledi;
+        for (xkb_led_index_t idx = 0; idx < from->num_led_names; idx++) {
+            LedNameInfo *ledi = &from->led_names[idx];
 
-        darray_enumerate(idx, ledi, from->led_names) {
             if (ledi->name == XKB_ATOM_NONE)
                 continue;
 
@@ -459,7 +385,7 @@ HandleKeycodeDef(KeyNamesInfo *info, KeycodeDef *stmt, enum merge_mode merge)
     return AddKeyName(info, stmt->value, stmt->name, merge, false, true);
 }
 
-static int
+static bool
 HandleAliasDef(KeyNamesInfo *info, KeyAliasDef *def, enum merge_mode merge)
 {
     AliasInfo *old, new;
@@ -499,7 +425,7 @@ HandleAliasDef(KeyNamesInfo *info, KeyAliasDef *def, enum merge_mode merge)
     return true;
 }
 
-static int
+static bool
 HandleKeyNameVar(KeyNamesInfo *info, VarDef *stmt)
 {
     const char *elem, *field;
@@ -524,7 +450,7 @@ HandleKeyNameVar(KeyNamesInfo *info, VarDef *stmt)
     return true;
 }
 
-static int
+static bool
 HandleLedNameDef(KeyNamesInfo *info, LedNameDef *def,
                  enum merge_mode merge)
 {
@@ -600,41 +526,45 @@ HandleKeycodesFile(KeyNamesInfo *info, XkbFile *file, enum merge_mode merge)
 static bool
 CopyKeyNamesToKeymap(struct xkb_keymap *keymap, KeyNamesInfo *info)
 {
-    xkb_keycode_t kc;
-    xkb_led_index_t idx;
-    LedNameInfo *ledi;
-    AliasInfo *alias;
-    unsigned i;
+    struct xkb_key *keys;
+    xkb_keycode_t min_key_code, max_key_code, kc;
 
-    keymap->keycodes_section_name = strdup_safe(info->name);
-    XkbEscapeMapName(keymap->keycodes_section_name);
-
-    if (info->min_key_code != XKB_KEYCODE_INVALID) {
-        keymap->min_key_code = info->min_key_code;
-        keymap->max_key_code = info->max_key_code;
-    }
-    else {
-        /*
-         * If the keymap has no keys, let's just use the safest pair
-         * we know.
-         */
-        keymap->min_key_code = 8;
-        keymap->max_key_code = 255;
+    min_key_code = info->min_key_code;
+    max_key_code = info->max_key_code;
+    /* If the keymap has no keys, let's just use the safest pair we know. */
+    if (min_key_code == XKB_KEYCODE_INVALID) {
+        min_key_code = 8;
+        max_key_code = 255;
     }
 
-    keymap->keys = calloc(keymap->max_key_code + 1, sizeof(*keymap->keys));
-    for (kc = keymap->min_key_code; kc <= keymap->max_key_code; kc++)
-        keymap->keys[kc].keycode = kc;
+    keys = calloc(max_key_code + 1, sizeof(*keys));
+    if (!keys)
+        return false;
 
-    /* Copy key names. */
+    for (kc = min_key_code; kc <= max_key_code; kc++)
+        keys[kc].keycode = kc;
+
     for (kc = info->min_key_code; kc <= info->max_key_code; kc++)
-        keymap->keys[kc].name = darray_item(info->key_names, kc);
+        keys[kc].name = darray_item(info->key_names, kc);
+
+    keymap->min_key_code = min_key_code;
+    keymap->max_key_code = max_key_code;
+    keymap->keys = keys;
+    return true;
+}
+
+static bool
+CopyKeyAliasesToKeymap(struct xkb_keymap *keymap, KeyNamesInfo *info)
+{
+    AliasInfo *alias;
+    unsigned i, num_key_aliases;
+    struct xkb_key_alias *key_aliases;
 
     /*
      * Do some sanity checking on the aliases. We can't do it before
      * because keys and their aliases may be added out-of-order.
      */
-    keymap->num_key_aliases = 0;
+    num_key_aliases = 0;
     darray_foreach(alias, info->aliases) {
         /* Check that ->real is a key. */
         if (!XkbKeyByName(keymap, alias->real, false)) {
@@ -657,27 +587,58 @@ CopyKeyNamesToKeymap(struct xkb_keymap *keymap, KeyNamesInfo *info)
             continue;
         }
 
-        keymap->num_key_aliases++;
+        num_key_aliases++;
     }
 
     /* Copy key aliases. */
-    keymap->key_aliases = calloc(keymap->num_key_aliases,
-                                 sizeof(*keymap->key_aliases));
+    key_aliases = NULL;
+    if (num_key_aliases > 0) {
+        key_aliases = calloc(num_key_aliases, sizeof(*key_aliases));
+        if (!key_aliases)
+            return false;
+    }
+
     i = 0;
     darray_foreach(alias, info->aliases) {
         if (alias->real != XKB_ATOM_NONE) {
-            keymap->key_aliases[i].alias = alias->alias;
-            keymap->key_aliases[i].real = alias->real;
+            key_aliases[i].alias = alias->alias;
+            key_aliases[i].real = alias->real;
             i++;
         }
     }
 
-    /* Copy LED names. */
-    darray_resize0(keymap->leds, darray_size(info->led_names));
-    darray_enumerate(idx, ledi, info->led_names)
-        if (ledi->name != XKB_ATOM_NONE)
-            darray_item(keymap->leds, idx).name = ledi->name;
+    keymap->num_key_aliases = num_key_aliases;
+    keymap->key_aliases = key_aliases;
+    return true;
+}
 
+static bool
+CopyLedNamesToKeymap(struct xkb_keymap *keymap, KeyNamesInfo *info)
+{
+    keymap->num_leds = info->num_led_names;
+    for (xkb_led_index_t idx = 0; idx < info->num_led_names; idx++) {
+        LedNameInfo *ledi = &info->led_names[idx];
+
+        if (ledi->name == XKB_ATOM_NONE)
+            continue;
+
+        keymap->leds[idx].name = ledi->name;
+    }
+
+    return true;
+}
+
+static bool
+CopyKeyNamesInfoToKeymap(struct xkb_keymap *keymap, KeyNamesInfo *info)
+{
+    /* This function trashes keymap on error, but that's OK. */
+    if (!CopyKeyNamesToKeymap(keymap, info) ||
+        !CopyKeyAliasesToKeymap(keymap, info) ||
+        !CopyLedNamesToKeymap(keymap, info))
+        return false;
+
+    keymap->keycodes_section_name = strdup_safe(info->name);
+    XkbEscapeMapName(keymap->keycodes_section_name);
     return true;
 }
 
@@ -695,7 +656,7 @@ CompileKeycodes(XkbFile *file, struct xkb_keymap *keymap,
     if (info.errorCount != 0)
         goto err_info;
 
-    if (!CopyKeyNamesToKeymap(keymap, &info))
+    if (!CopyKeyNamesInfoToKeymap(keymap, &info))
         goto err_info;
 
     ClearKeyNamesInfo(&info);
