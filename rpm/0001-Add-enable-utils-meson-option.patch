@@ -1,0 +1,55 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Tomi=20Lepp=C3=A4nen?= <tomi.leppanen@jolla.com>
+Date: Mon, 20 Sep 2021 16:34:09 +0300
+Subject: [PATCH] Add enable-utils meson option
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+This allows disabling of xkbcli tool.
+
+Signed-off-by: Tomi Leppänen <tomi.leppanen@jolla.com>
+---
+ meson.build       | 4 ++--
+ meson_options.txt | 6 ++++++
+ 2 files changed, 8 insertions(+), 2 deletions(-)
+
+diff --git a/meson.build b/meson.build
+index 590cf1d..480d511 100644
+--- a/meson.build
++++ b/meson.build
+@@ -407,7 +407,7 @@ man_pages = []
+ 
+ # Tools
+ build_tools = have_getopt_long
+-if build_tools
++if build_tools and get_option('enable-utils')
+     libxkbcommon_tools_internal = static_library(
+         'tools-internal',
+         'tools/tools-common.h',
+@@ -691,7 +691,7 @@ if get_option('enable-xkbregistry')
+         env: test_env,
+     )
+ endif
+-if build_tools
++if build_tools and get_option('enable-utils')
+     test('tool-option-parsing',
+          find_program('test/tool-option-parsing.py'),
+          env: test_env,
+diff --git a/meson_options.txt b/meson_options.txt
+index 04982c6..966b104 100644
+--- a/meson_options.txt
++++ b/meson_options.txt
+@@ -67,3 +67,9 @@ option(
+     value: true,
+     description: 'Enable building libxkbregistry',
+ )
++option(
++    'enable-utils',
++    type: 'boolean',
++    value: true,
++    description: 'Enable building xkbcli',
++)
+-- 
+2.31.1
+
