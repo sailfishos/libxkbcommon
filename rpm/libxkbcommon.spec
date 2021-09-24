@@ -1,45 +1,44 @@
 Name:       libxkbcommon
-
-Summary:    Xorg X11 common xkb library
-Version:    0.3.2
+Version:    1.3.1
 Release:    1
-Group:      System/Libraries
+Summary:    X.Org XKB parsing library
 License:    MIT
 URL:        http://www.x.org/
 Source0:    libxkbcommon-%{version}.tar.bz2
+Patch0:     0001-Add-enable-utils-meson-option.patch
 Requires(post): /sbin/ldconfig
 Requires(postun): /sbin/ldconfig
+BuildRequires:  meson
 BuildRequires:  byacc
-BuildRequires:  libtool
 BuildRequires:  flex
 BuildRequires:  bison
+BuildRequires:  pkgconfig(xkeyboard-config)
+Requires:       xkeyboard-config
 
 %description
-xkb Libraries file.
+%{name} is the X.Org library for compiling XKB maps into formats usable by
+the X Server or other display servers.
 
 %package devel
-Summary:    Xorg X11 common xkb libray
-Group:      Development/Libraries
-Requires:   %{name} = %{version}-%{release}
+Summary:  X.Org XKB parsing development package
+Requires: %{name} = %{version}-%{release}
 
 %description devel
-xkb Development Libraries file.
-
+%{summary}.
 
 %prep
-%setup -q -n %{name}-%{version}/%{name}
-
+%autosetup -p1 -n %{name}-%{version}/upstream
 
 %build
-
-CFLAGS="-std=c99" %autogen --disable-static \
-    --with-xkb-config-root=/usr/share/X11/xkb --disable-x11
-
-make %{?jobs:-j%jobs}
+%meson -Denable-docs=false \
+       -Denable-x11=false \
+       -Denable-wayland=false \
+       -Denable-xkbregistry=false \
+       -Denable-utils=false
+%meson_build
 
 %install
-rm -rf %{buildroot}
-%make_install
+%meson_install
 
 %post -p /sbin/ldconfig
 
@@ -47,12 +46,13 @@ rm -rf %{buildroot}
 
 %files
 %defattr(-,root,root,-)
+%license LICENSE
 %{_libdir}/libxkbcommon.so.0
 %{_libdir}/libxkbcommon.so.0.0.0
 
 %files devel
 %defattr(-,root,root,-)
-#%{_libdir}/extensions/XKBcommon.h
+%dir %{_includedir}/xkbcommon/
 %{_includedir}/xkbcommon/xkbcommon.h
 %{_includedir}/xkbcommon/xkbcommon-names.h
 %{_includedir}/xkbcommon/xkbcommon-keysyms.h
